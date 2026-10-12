@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { ZodObject, ZodRawShape } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { envApplyTool, envKeysTool, requiresFullEnvText } from "./envTools.js";
 import { generatedTools } from "./generated/tools.js";
 import { createHandler } from "./handler.js";
 import { superPasswordStatusTool } from "./superPassword.js";
@@ -92,10 +93,20 @@ function getEnabledTools() {
 // closed super password. Every other superPassword procedure (set, unlock,
 // reset) stays out even if a spec sync generates it: the super password must
 // never pass through the model.
-function withSuperPasswordStatus(tools: ToolDefinition[]): ToolDefinition[] {
+//
+// The blind env tools are always loaded too: they are the only way left to
+// manage variables, because tools that need a whole env text are dropped. A
+// generated tool with the "env" tag would bypass their checks, so it stays out
+// the same way.
+const ALWAYS_LOADED_TOOLS = [superPasswordStatusTool, envKeysTool, envApplyTool];
+const HAND_WRITTEN_TAGS = new Set(ALWAYS_LOADED_TOOLS.map((tool) => tool.tag.toLowerCase()));
+
+function withAlwaysLoadedTools(tools: ToolDefinition[]): ToolDefinition[] {
   return [
-    ...tools.filter((tool) => tool.tag.toLowerCase() !== superPasswordStatusTool.tag.toLowerCase()),
-    superPasswordStatusTool,
+    ...tools.filter(
+      (tool) => !HAND_WRITTEN_TAGS.has(tool.tag.toLowerCase()) && !requiresFullEnvText(tool),
+    ),
+    ...ALWAYS_LOADED_TOOLS,
   ];
 }
 
@@ -171,7 +182,7 @@ export function createServer() {
     version: "2.0.0",
   });
 
-  const tools = withSuperPasswordStatus(getEnabledTools());
+  const tools = withAlwaysLoadedTools(getEnabledTools());
 
   for (const tool of tools) {
     server.tool(

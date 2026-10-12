@@ -22,13 +22,20 @@ const SERVER_DENIAL_MESSAGES = new Map<string, SuperPasswordDenial>([
   ],
 ]);
 
+// The panel treats most deletions as ordinary writes. Naming both groups keeps
+// the model from reading "dangerous" as "every deletion is forbidden".
+const BROWSER_ONLY_ACTIONS =
+  "revealing secret values (env, API keys, container or volume file contents, docker inspect), terminals, deleting a whole service, database, project, environment, server, volume, registry, destination, git provider, SSH key, certificate or notification, and managing users, API keys and SSO";
+const ORDINARY_WRITES =
+  "every other write, including deleting a schedule, domain, mount, port, redirect, basic-auth entry, backup configuration, volume backup, deployment record, tag, container or image, and removing single env variables with env-apply";
+
 const DENIAL_DETAILS: Record<SuperPasswordDenial, string> = {
   "api-key-write-locked":
     "Super password access is closed, so writes through the API key are locked. Reads still work. Ask the owner to open access in Dokploy Profile → Super password (it lasts 24 hours), then retry. Call superPassword-status to check the state.",
   "super-session-required":
     "This action needs open super password access. Ask the owner to open access in Dokploy Profile → Super password, then retry. Call superPassword-status to check the state.",
   "browser-session-required":
-    "This action is only allowed in the Dokploy panel in a browser with super password access open. API keys, including this MCP server, can never perform it, even while access is open. Ask the owner to do it in the panel.",
+    "This action is only allowed in the Dokploy panel in a browser with super password access open. API keys, including this MCP server, can never perform it, even while access is open. Ask the owner to do it in the panel. This applies to this action only: other writes, including most deletions, work through the API key while access is open.",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -58,8 +65,7 @@ export function superPasswordDenialResponse(
 
 export const superPasswordStatusTool: ToolDefinition = {
   name: "superPassword-status",
-  description:
-    "Check whether the Dokploy super password access is open. While it is closed, writes through the API key fail with 403 until the owner opens access in Profile → Super password (24 hours per opening). Dangerous actions (revealing env, deletions, terminals, users and keys) are never available through the API.",
+  description: `Check whether the Dokploy super password access is open. While it is closed, writes through the API key fail with 403 until the owner opens access in Profile → Super password (24 hours per opening). Never available through an API key, only in the panel in a browser: ${BROWSER_ONLY_ACTIONS}. Allowed through the API key while access is open: ${ORDINARY_WRITES}.`,
   tag: "superPassword",
   method: "GET",
   path: "/superPassword.status",
@@ -109,6 +115,7 @@ export function summarizeSuperPasswordStatus(
     timeLeft: active && Number.isFinite(expiresAtMs) ? formatTimeLeft(expiresAtMs - now) : null,
     lockedUntil,
     apiKeyWrites,
-    dangerousActions: "never through the API: only in the panel in a browser with access open",
+    browserOnlyActions: `never through an API key, only in the panel in a browser with access open: ${BROWSER_ONLY_ACTIONS}`,
+    apiKeyAllowedWrites: `through the API key while access is open: ${ORDINARY_WRITES}`,
   };
 }

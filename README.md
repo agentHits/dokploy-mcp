@@ -314,14 +314,27 @@ The configuration on Windows is slightly different compared to Linux or macOS. U
 | `DOKPLOY_TIMEOUT` | No | Request timeout in milliseconds (default: `30000`) |
 | `DOKPLOY_RETRY_ATTEMPTS` | No | Number of retry attempts (default: `3`) |
 | `DOKPLOY_RETRY_DELAY` | No | Delay between retries in milliseconds (default: `1000`) |
-| `DOKPLOY_REDACT_ENV` | No | Redacts secret-bearing fields (env vars, compose files, passwords, tokens, keys) from API responses before they reach the MCP client (default: `true`). Set to `false` only if you explicitly need raw secret values in LLM context. |
-| `DOKPLOY_REDACT_FIELDS` | No | Comma-separated list of response field names to redact when `DOKPLOY_REDACT_ENV=true`. Matched case-insensitively at any nesting depth. Defaults to: `env`, `buildArgs`, `composeFile`, `dockerCompose`, `environment`, `buildSecrets`, `previewBuildSecrets`, `password`, `currentPassword`, `appPassword`, `databasePassword`, `databaseRootPassword`, `redisPassword`, `mariadbPassword`, `mongoPassword`, `mysqlPassword`, `postgresPassword`, `registryPassword`, `token`, `accessToken`, `appToken`, `apiToken`, `botToken`, `refreshToken`, `secret`, `clientSecret`, `apiKey`, `secretAccessKey`, `accessKey`, `licenseKey`, `userKey`, `privateKey`, `privateKeyPass`, `encPrivateKey`, `encPrivateKeyPass`, `sshKey`, `sshPrivateKey`, `customGitSSHKey`, `dockerAuth`. |
+| `DOKPLOY_REDACT_ENV` | No | Ignored. Secret values are always removed from tool results; `false` only logs a warning at startup. See [Secrets never reach the model](#secrets-never-reach-the-model). |
+| `DOKPLOY_REDACT_FIELDS` | No | Comma-separated extra field names to redact. They are added to the built-in list and cannot remove anything from it. A name matches a field when the field name ends with it, at any nesting depth, ignoring case, `_` and `-`. Built-in list: `env`, `buildArgs`, `buildSecrets`, `previewBuildSecrets`, `previewEnv`, `previewBuildArgs`, `password`, `currentPassword`, `appPassword`, `databasePassword`, `databaseRootPassword`, `redisPassword`, `mariadbPassword`, `mongoPassword`, `mysqlPassword`, `postgresPassword`, `registryPassword`, `token`, `accessToken`, `appToken`, `apiToken`, `botToken`, `refreshToken`, `metricsToken`, `secret`, `clientSecret`, `webhookSecret`, `githubClientSecret`, `githubWebhookSecret`, `apiKey`, `secretKey`, `secretAccessKey`, `accessKey`, `applicationKey`, `consumerKey`, `licenseKey`, `userKey`, `privateKey`, `privateKeyPass`, `encPrivateKey`, `encPrivateKeyPass`, `githubPrivateKey`, `sshKey`, `sshPrivateKey`, `customGitSSHKey`, `dockerAuth`, `authorization`, `cookie`, `credentials`, `connectionString`, `dsn`, `webhookUrl`. |
 
 For Dokploy instances behind Cloudflare Access or a similar reverse proxy, pass service-token headers with placeholder values like this:
 
 ```bash
 DOKPLOY_CUSTOM_HEADERS='{"CF-Access-Client-Id":"your-client-id.access","CF-Access-Client-Secret":"your-client-secret"}'
 ```
+
+## Secrets never reach the model
+
+The server removes secret values from every tool result and from its own log. This cannot be switched off.
+
+- **Secret fields.** The built-in field list above is redacted at any depth. A string becomes `[REDACTED]`; booleans, numbers, `null` and empty strings are kept, so flags such as `secret: true` stay readable. Variable lists (`env`, `buildArgs`, `buildSecrets`, docker `Env`) keep the variable names: `NAME=[REDACTED]`.
+- **Free text.** Every other string is scrubbed: logs, compose files, Traefik and container files (base64 file content is decoded, scrubbed and encoded again; binary content is replaced), error text. Values of secret-looking names in `NAME=value`, `key: value` and JSON, URL passwords, `Authorization` and `Bearer` tokens, `--password`-style flags, well-known token formats and PEM private keys become `[REDACTED]`. Variable references such as `${VAR}` and `${{project.VAR}}` are kept; an inline default (`${VAR:-default}`) is redacted.
+- **Blind env tools.** `env-keys` lists variable names with `secret` and `empty` flags. `env-apply` changes single variables and never returns a value: `set` a value that is already known, `generate` a random secret on the server, `copy` a value from another service, `remove` a variable. A secret that only the user knows is entered in the Dokploy panel, not in the chat. Changes apply after a redeploy. Both tools, like `superPassword-status`, are loaded with every preset and tag filter. They need a Dokploy version that provides `GET /env.keys` and `POST /env.apply`.
+- **No full-replace writes.** Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv`) are not listed. Every other tool rejects the fields `env`, `buildArgs`, `buildSecrets`, `previewEnv`, `previewBuildArgs` and `previewBuildSecrets`, because writing them would replace variables the model cannot see.
+- **No write-back of redacted text.** An input that contains `[REDACTED]` or `__DOKPLOY_REDACTED_SECRET__` is rejected.
+- **Errors.** The body of a failed API response is never passed on. The model gets a fixed message per status.
+
+The free-text scrubber works from names and formats. A secret stored in a file under a neutral name (`FOO: value`) is not recognised, so keep secrets in env variables and reference them.
 
 ## Transport Modes
 

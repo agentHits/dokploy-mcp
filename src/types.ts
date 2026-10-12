@@ -13,8 +13,10 @@ export interface ToolExecutionPolicy {
     | "compose-env-upsert"
     | "compose-deploy-exact"
     | "deployment-reconcile"
-    | "super-password-status";
-  maxAttempts: 3;
+    | "super-password-status"
+    | "env-keys"
+    | "env-apply";
+  maxAttempts: 1 | 3;
 }
 
 export interface ToolDefinition {

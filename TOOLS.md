@@ -2,20 +2,22 @@
 
 > Auto-generated from the [Dokploy OpenAPI spec](https://docs.dokploy.com/openapi.json). Run `pnpm generate` to update.
 
-- **Total Tools**: 608
-- **Categories**: 57
+- **Total Tools**: 602
+- **Categories**: 59
+
+Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv`) are not exposed. Variables are managed with `env-keys` and `env-apply`, which never return values.
 
 ## Categories
 
 - [admin](#admin) (1 tools)
 - [ai](#ai) (14 tools)
-- [application](#application) (33 tools)
+- [application](#application) (32 tools)
 - [auditLog](#auditLog) (1 tools)
 - [backup](#backup) (12 tools)
 - [bitbucket](#bitbucket) (7 tools)
 - [certificates](#certificates) (5 tools)
 - [cluster](#cluster) (4 tools)
-- [compose](#compose) (33 tools)
+- [compose](#compose) (32 tools)
 - [customRole](#customRole) (6 tools)
 - [deployment](#deployment) (10 tools)
 - [destination](#destination) (6 tools)
@@ -25,39 +27,41 @@
 - [dockerImage](#dockerImage) (3 tools)
 - [dockerVolume](#dockerVolume) (8 tools)
 - [domain](#domain) (10 tools)
+- [env](#env) (2 tools)
 - [environment](#environment) (7 tools)
 - [forwardAuth](#forwardAuth) (10 tools)
 - [gitea](#gitea) (8 tools)
 - [github](#github) (6 tools)
 - [gitlab](#gitlab) (7 tools)
 - [gitProvider](#gitProvider) (4 tools)
-- [libsql](#libsql) (14 tools)
+- [libsql](#libsql) (13 tools)
 - [licenseKey](#licenseKey) (6 tools)
-- [mariadb](#mariadb) (16 tools)
-- [mongo](#mongo) (16 tools)
+- [mariadb](#mariadb) (15 tools)
+- [mongo](#mongo) (15 tools)
 - [mounts](#mounts) (6 tools)
-- [mysql](#mysql) (16 tools)
+- [mysql](#mysql) (15 tools)
 - [network](#network) (9 tools)
 - [notification](#notification) (41 tools)
 - [organization](#organization) (11 tools)
 - [overview](#overview) (3 tools)
 - [patch](#patch) (12 tools)
 - [port](#port) (4 tools)
-- [postgres](#postgres) (16 tools)
+- [postgres](#postgres) (15 tools)
 - [previewDeployment](#previewDeployment) (4 tools)
 - [project](#project) (11 tools)
 - [redirects](#redirects) (4 tools)
-- [redis](#redis) (16 tools)
+- [redis](#redis) (15 tools)
 - [registry](#registry) (7 tools)
 - [rollback](#rollback) (2 tools)
 - [schedule](#schedule) (6 tools)
 - [scim](#scim) (3 tools)
 - [security](#security) (4 tools)
 - [server](#server) (19 tools)
-- [settings](#settings) (52 tools)
+- [settings](#settings) (51 tools)
 - [sshKey](#sshKey) (7 tools)
 - [sso](#sso) (11 tools)
 - [stripe](#stripe) (10 tools)
+- [superPassword](#superPassword) (1 tools)
 - [swarm](#swarm) (4 tools)
 - [tag](#tag) (8 tools)
 - [user](#user) (26 tools)
@@ -102,7 +106,6 @@
 | `application-stop` | POST | `applicationId` (string) |
 | `application-start` | POST | `applicationId` (string) |
 | `application-redeploy` | POST | `applicationId` (string), `title`?, `description`? |
-| `application-saveEnvironment` | POST | `applicationId` (string), `env` (string | null), `buildArgs` (string | null), `buildSecrets` (string | null), `createEnvFile` (boolean) |
 | `application-saveBuildType` | POST | `applicationId` (string), `buildType` ("dockerfile" | "heroku_buildpacks" | "paketo_buildpacks" | "nixpacks" | "static" | "railpack"), `dockerfile` (string | null), `dockerContextPath` (string | null), `dockerBuildStage` (string | null), `herokuVersion` (string | null), `railpackVersion` (string | null), `publishDirectory`?, `isStaticSpa`? |
 | `application-saveGithubProvider` | POST | `applicationId` (string), `repository` (string | null), `owner` (string | null), `buildPath` (string | null), `githubId` (string | null), `branch` (string), `triggerType` ("push" | "tag"), `enableSubmodules`?, `watchPaths`? |
 | `application-saveGitlabProvider` | POST | `applicationId` (string), `gitlabBuildPath` (string | null), `gitlabOwner` (string | null), `gitlabRepository` (string | null), `gitlabId` (string | null), `gitlabProjectId` (number | null), `gitlabPathNamespace` (string | null), `gitlabBranch` (string), `enableSubmodules`?, `watchPaths`? |
@@ -189,7 +192,6 @@
 | `compose-create` | POST | `name` (string), `environmentId` (string), +6 optional |
 | `compose-one` | GET | `composeId` (string) |
 | `compose-update` | POST | `composeId` (string), +46 optional |
-| `compose-saveEnvironment` | POST | `composeId` (string), `env` (string | null), `createEnvFile`? |
 | `compose-delete` | POST | `composeId` (string), `deleteVolumes` (boolean) |
 | `compose-cleanQueues` | POST | `composeId` (string) |
 | `compose-clearDeployments` | POST | `composeId` (string) |
@@ -340,6 +342,13 @@
 | `domain-delete` | POST | `domainId` (string) |
 | `domain-validateDomain` | POST | `domain` (string), `serverId`? |
 
+## env
+
+| Tool | Method | Parameters |
+|------|--------|------------|
+| `env-keys` | GET | `scope` ("application" | "compose" | "postgres" | "mysql" | "mariadb" | "mongo" | "redis" | "libsql" | "project" | "environment"), `id` (string), `field`? |
+| `env-apply` | POST | `scope` ("application" | "compose" | "postgres" | "mysql" | "mariadb" | "mongo" | "redis" | "libsql" | "project" | "environment"), `id` (string), +7 optional |
+
 ## environment
 
 | Tool | Method | Parameters |
@@ -424,7 +433,6 @@
 | `libsql-deploy` | POST | `libsqlId` (string) |
 | `libsql-changeStatus` | POST | `libsqlId` (string), `applicationStatus` ("idle" | "running" | "done" | "error") |
 | `libsql-remove` | POST | `libsqlId` (string) |
-| `libsql-saveEnvironment` | POST | `libsqlId` (string), `env` (string | null) |
 | `libsql-reload` | POST | `libsqlId` (string), `appName` (string) |
 | `libsql-update` | POST | `libsqlId` (string), +34 optional |
 | `libsql-move` | POST | `libsqlId` (string), `targetEnvironmentId` (string) |
@@ -454,7 +462,6 @@
 | `mariadb-deploy` | POST | `mariadbId` (string) |
 | `mariadb-changeStatus` | POST | `mariadbId` (string), `applicationStatus` ("idle" | "running" | "done" | "error") |
 | `mariadb-remove` | POST | `mariadbId` (string) |
-| `mariadb-saveEnvironment` | POST | `mariadbId` (string), `env` (string | null) |
 | `mariadb-reload` | POST | `mariadbId` (string), `appName` (string) |
 | `mariadb-update` | POST | `mariadbId` (string), +33 optional |
 | `mariadb-changePassword` | POST | `mariadbId` (string), `password` (string), `type`? |
@@ -476,7 +483,6 @@
 | `mongo-changeStatus` | POST | `mongoId` (string), `applicationStatus` ("idle" | "running" | "done" | "error") |
 | `mongo-reload` | POST | `mongoId` (string), `appName` (string) |
 | `mongo-remove` | POST | `mongoId` (string) |
-| `mongo-saveEnvironment` | POST | `mongoId` (string), `env` (string | null) |
 | `mongo-update` | POST | `mongoId` (string), +32 optional |
 | `mongo-changePassword` | POST | `mongoId` (string), `password` (string) |
 | `mongo-move` | POST | `mongoId` (string), `targetEnvironmentId` (string) |
@@ -508,7 +514,6 @@
 | `mysql-changeStatus` | POST | `mysqlId` (string), `applicationStatus` ("idle" | "running" | "done" | "error") |
 | `mysql-reload` | POST | `mysqlId` (string), `appName` (string) |
 | `mysql-remove` | POST | `mysqlId` (string) |
-| `mysql-saveEnvironment` | POST | `mysqlId` (string), `env` (string | null) |
 | `mysql-update` | POST | `mysqlId` (string), +33 optional |
 | `mysql-changePassword` | POST | `mysqlId` (string), `password` (string), `type`? |
 | `mysql-move` | POST | `mysqlId` (string), `targetEnvironmentId` (string) |
@@ -638,7 +643,6 @@
 | `postgres-deploy` | POST | `postgresId` (string) |
 | `postgres-changeStatus` | POST | `postgresId` (string), `applicationStatus` ("idle" | "running" | "done" | "error") |
 | `postgres-remove` | POST | `postgresId` (string) |
-| `postgres-saveEnvironment` | POST | `postgresId` (string), `env` (string | null) |
 | `postgres-reload` | POST | `postgresId` (string), `appName` (string) |
 | `postgres-update` | POST | `postgresId` (string), +32 optional |
 | `postgres-changePassword` | POST | `postgresId` (string), `password` (string) |
@@ -694,7 +698,6 @@
 | `redis-deploy` | POST | `redisId` (string) |
 | `redis-changeStatus` | POST | `redisId` (string), `applicationStatus` ("idle" | "running" | "done" | "error") |
 | `redis-remove` | POST | `redisId` (string) |
-| `redis-saveEnvironment` | POST | `redisId` (string), `env` (string | null) |
 | `redis-update` | POST | `redisId` (string), +30 optional |
 | `redis-changePassword` | POST | `redisId` (string), `password` (string) |
 | `redis-move` | POST | `redisId` (string), `targetEnvironmentId` (string) |
@@ -814,7 +817,6 @@
 | `settings-updateServerIp` | POST | `serverIp` (string) |
 | `settings-getOpenApiDocument` | GET | None |
 | `settings-readTraefikEnv` | GET | `serverId`? |
-| `settings-writeTraefikEnv` | POST | `env` (string), `serverId`? |
 | `settings-haveTraefikDashboardPortEnabled` | GET | `serverId`? |
 | `settings-haveActivateRequests` | GET | None |
 | `settings-toggleRequests` | POST | `enable` (boolean) |
@@ -872,6 +874,12 @@
 | `stripe-canCreateMoreServers` | GET | None |
 | `stripe-updateInvoiceNotifications` | POST | `enabled` (boolean) |
 | `stripe-getInvoices` | GET | None |
+
+## superPassword
+
+| Tool | Method | Parameters |
+|------|--------|------------|
+| `superPassword-status` | GET | None |
 
 ## swarm
 

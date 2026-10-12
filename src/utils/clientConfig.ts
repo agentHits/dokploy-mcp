@@ -1,4 +1,6 @@
-import { DEFAULT_REDACTED_FIELDS } from "./redactSensitive.js";
+import { createLogger } from "./logger.js";
+
+const logger = createLogger("Config");
 
 export interface Config {
   dokployUrl: string;
@@ -7,8 +9,8 @@ export interface Config {
   timeout: number;
   retryAttempts: number;
   retryDelay: number;
-  redactEnv: boolean;
-  redactFields: string[];
+  /** Field names redacted on top of the built-in baseline, which always applies. */
+  extraRedactFields: string[];
 }
 
 const RESERVED_CUSTOM_HEADER_NAMES = new Set(["x-api-key", "content-type", "accept"]);
@@ -93,12 +95,15 @@ export class ConfigManager {
       throw new Error("Environment variable DOKPLOY_API_KEY is not defined");
     }
 
-    const redactEnv = parseBoolean(process.env.DOKPLOY_REDACT_ENV, true);
-    const parsedFields =
+    if (!parseBoolean(process.env.DOKPLOY_REDACT_ENV, true)) {
+      logger.warn(
+        "DOKPLOY_REDACT_ENV=false is ignored: response redaction cannot be disabled in this build",
+      );
+    }
+    const extraRedactFields =
       process.env.DOKPLOY_REDACT_FIELDS?.split(",")
         .map((f) => f.trim())
         .filter((f) => f.length > 0) ?? [];
-    const redactFields = parsedFields.length > 0 ? parsedFields : DEFAULT_REDACTED_FIELDS;
 
     return {
       dokployUrl,
@@ -107,8 +112,7 @@ export class ConfigManager {
       timeout: parseInt(process.env.DOKPLOY_TIMEOUT || "30000", 10),
       retryAttempts: parseInt(process.env.DOKPLOY_RETRY_ATTEMPTS || "3", 10),
       retryDelay: parseInt(process.env.DOKPLOY_RETRY_DELAY || "1000", 10),
-      redactEnv,
-      redactFields,
+      extraRedactFields,
     };
   }
 }
