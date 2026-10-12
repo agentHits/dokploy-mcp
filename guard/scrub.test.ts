@@ -4,7 +4,7 @@ import { scrubOutputText, scrubToolResponse } from "./scrub.js";
 const SECRET = "fake-value-7Qx";
 const PLAIN = "plain-setting-42";
 const PANEL_BARE = "__DOKPLOY_REDACTED_SECRET__";
-const PANEL_TOKEN = `${PANEL_BARE}K7F3K9Q2M4XA__`;
+const PANEL_TOKEN = `${PANEL_BARE}K7F3K6Q2M4XA__`;
 
 function expectScrubbed(input: string, expected: string) {
   const output = scrubOutputText(input);

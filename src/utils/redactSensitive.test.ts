@@ -522,7 +522,7 @@ describe("redactSensitive: base64 file content", () => {
 
 describe("redactSensitive: values that are already hidden", () => {
   const PANEL_BARE = "__DOKPLOY_REDACTED_SECRET__";
-  const PANEL_TOKEN = `${PANEL_BARE}K7F3K9Q2M4XA__`;
+  const PANEL_TOKEN = `${PANEL_BARE}K7F3K6Q2M4XA__`;
   const PLACEHOLDERS = [PANEL_TOKEN, PANEL_BARE, "[REDACTED]"];
 
   it("keeps a compose file and a file mount with tokens byte for byte", () => {

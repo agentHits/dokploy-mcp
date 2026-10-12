@@ -9,7 +9,7 @@ import {
 } from "./scrubSecrets.js";
 
 const SECRET = "fake-value-7Qx";
-const PANEL_TOKEN = `${PANEL_REDACTED}K7F3K9Q2M4XA__`;
+const PANEL_TOKEN = `${PANEL_REDACTED}K7F3K6Q2M4XA__`;
 
 // Token-shaped fixtures are assembled at run time so the repository never
 // contains a literal that a secret scanner would report.
@@ -361,10 +361,10 @@ describe("scrubSecrets: placeholders and idempotence", () => {
 
     const notTokens = [
       `${PANEL_REDACTED}K7F3K9Q2M4X__`,
-      `${PANEL_REDACTED}K7F3K9Q2M4XAB__`,
+      `${PANEL_REDACTED}K7F3K6Q2M4XAB__`,
       `${PANEL_REDACTED}k7f3k9q2m4xa__`,
       `${PANEL_REDACTED}K7F3K9Q2M4X-__`,
-      `${PANEL_REDACTED}K7F3K9Q2M4XA_`,
+      `${PANEL_REDACTED}K7F3K6Q2M4XA_`,
       `${PANEL_TOKEN}x`,
       `x${PANEL_TOKEN}`,
       "",
@@ -434,7 +434,7 @@ describe("scrubSecrets: placeholders and idempotence", () => {
       REDACTED,
       PANEL_REDACTED,
       PANEL_TOKEN,
-      "K7F3K9Q2M4XA__",
+      "K7F3K6Q2M4XA__",
       "https://u:p@h/x",
       "export ",
       "- ",

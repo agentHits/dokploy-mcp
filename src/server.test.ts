@@ -49,7 +49,7 @@ function countByTags(tags: string[]): number {
 }
 
 const SECRET = "fake-value-7Qx";
-const PANEL_TOKEN = "__DOKPLOY_REDACTED_SECRET__K7F3K9Q2M4XA__";
+const PANEL_TOKEN = "__DOKPLOY_REDACTED_SECRET__K7F3K6Q2M4XA__";
 const OTHER_PANEL_TOKEN = "__DOKPLOY_REDACTED_SECRET__AAAABBBB2345__";
 
 const RECOVERY_PATHS = [
@@ -1496,10 +1496,10 @@ describe("MCP server tools/list", () => {
       `A: ${bare}${PANEL_TOKEN}`,
       `A: ${PANEL_TOKEN.slice(0, -2)}${OTHER_PANEL_TOKEN}`,
       `A: ${bare}K7F3K9Q2M4X__`,
-      `A: ${bare}K7F3K9Q2M4XAB__`,
+      `A: ${bare}K7F3K6Q2M4XAB__`,
       `A: ${bare}k7f3k9q2m4xa__`,
-      `A: ${bare}K7F3K9Q2M4XA_`,
-      `A: ${bare}K7F3K9Q2M4XA`,
+      `A: ${bare}K7F3K6Q2M4XA_`,
+      `A: ${bare}K7F3K6Q2M4XA`,
     ];
 
     for (const text of texts) {

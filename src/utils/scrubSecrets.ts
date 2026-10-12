@@ -5,7 +5,7 @@ export const SECRET_PLACEHOLDERS = [PANEL_REDACTED, REDACTED] as const;
 // the bare placeholder, a 12-character id and a closing "__". The id is base32
 // (A-Z, 2-7); the other digits are accepted too, because whether a token exists
 // is the panel's call and a wider shape here cannot reveal anything.
-const PANEL_TOKEN = /__DOKPLOY_REDACTED_SECRET__[A-Z0-9]{12}__/y;
+const PANEL_TOKEN = /__DOKPLOY_REDACTED_SECRET__[A-Z2-7]{12}__/y;
 
 const SENSITIVE_NAME =
   /access[_-]?key|api[_-]?key|auth|credential|private[_-]?key|token|secret|password|passwd|pwd|pass|dsn|cookie|session|signature|salt|webhook|license|encryption|jwt/i;
