@@ -14,6 +14,12 @@ const logger = createLogger("MCP-Server");
 const JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema";
 const LARGE_TOOLSET_WARNING_THRESHOLD = 150;
 
+const SERVER_INSTRUCTIONS = [
+  "Secret values are hidden in every result of this server: they show up as [REDACTED] or __DOKPLOY_REDACTED_SECRET__ and cannot be read here.",
+  "List variable names with env-keys and set, generate, copy or remove single variables with env-apply.",
+  "In a compose file or a file mount a hidden value can appear as a token of the form __DOKPLOY_REDACTED_SECRET__XXXXXXXXXXXX__: send it back unchanged, where it was, with compose-update or mounts-update to keep the stored value, and never invent or alter a token.",
+].join(" ");
+
 const TOOL_PRESETS = {
   all: null,
   minimal: "project,application",
@@ -177,10 +183,13 @@ function toDraft2020_12JsonSchema(schema: ZodObject<ZodRawShape>): Record<string
 }
 
 export function createServer() {
-  const server = new McpServer({
-    name: "dokploy",
-    version: "2.0.0",
-  });
+  const server = new McpServer(
+    {
+      name: "dokploy",
+      version: "2.0.0",
+    },
+    { instructions: SERVER_INSTRUCTIONS },
+  );
 
   const tools = withAlwaysLoadedTools(getEnabledTools());
 

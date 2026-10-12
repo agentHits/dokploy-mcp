@@ -1,7 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import { isSensitiveName, PANEL_REDACTED, REDACTED, scrubSecrets } from "./scrubSecrets.js";
+import {
+  isSecretPlaceholder,
+  isSensitiveName,
+  PANEL_REDACTED,
+  panelTokenAt,
+  REDACTED,
+  scrubSecrets,
+} from "./scrubSecrets.js";
 
 const SECRET = "fake-value-7Qx";
+const PANEL_TOKEN = `${PANEL_REDACTED}K7F3K9Q2M4XA__`;
 
 // Token-shaped fixtures are assembled at run time so the repository never
 // contains a literal that a secret scanner would report.
@@ -309,6 +317,65 @@ describe("scrubSecrets: placeholders and idempotence", () => {
     expectUntouched(`mysql --password=${PANEL_REDACTED}`);
   });
 
+  it("keeps restorable panel tokens byte for byte", () => {
+    const untouched = [
+      `PASSWORD: ${PANEL_TOKEN}`,
+      `- API_KEY=${PANEL_TOKEN}`,
+      `postgres://app:${PANEL_TOKEN}@db/app`,
+      `      - "SESSION_SECRET=${PANEL_TOKEN}"`,
+      `export API_TOKEN='${PANEL_TOKEN}'`,
+      `password: "${PANEL_TOKEN}"`,
+      `{"token": "${PANEL_TOKEN}", "apiKey":"${PANEL_TOKEN}"}`,
+      `{\\"apiKey\\": \\"${PANEL_TOKEN}\\"}`,
+      `Authorization: Bearer ${PANEL_TOKEN}`,
+      `AUTH_HEADER=Bearer ${PANEL_TOKEN}`,
+      `mysql --password=${PANEL_TOKEN} --token ${PANEL_TOKEN}`,
+      `https://${PANEL_TOKEN}@git.example.test/repo.git`,
+      `https://${PANEL_TOKEN}:x-oauth-basic@git.example.test/repo.git`,
+      `DB_PASSWORD=\${DB_PASSWORD:-${PANEL_TOKEN}}`,
+      `command: ["worker", "--api-token", "${PANEL_TOKEN}"]`,
+      `note: ${PANEL_TOKEN} and ${PANEL_TOKEN}${PANEL_TOKEN}`,
+    ];
+    for (const input of untouched) {
+      expectUntouched(input);
+    }
+  });
+
+  it("redacts the secret next to a token without touching the token", () => {
+    expectScrubbed(
+      `A_SECRET: ${PANEL_TOKEN}\nB_SECRET: ${SECRET}\nC_KEY=${PANEL_TOKEN}`,
+      `A_SECRET: ${PANEL_TOKEN}\nB_SECRET: [REDACTED]\nC_KEY=${PANEL_TOKEN}`,
+    );
+    expectScrubbed(
+      `postgres://app:${PANEL_TOKEN}@db/app postgres://app:${SECRET}@db/app`,
+      `postgres://app:${PANEL_TOKEN}@db/app postgres://app:[REDACTED]@db/app`,
+    );
+  });
+
+  it("recognises a token only in its exact form", () => {
+    expect(panelTokenAt(`x ${PANEL_TOKEN} y`, 2)).toBe(PANEL_TOKEN);
+    expect(panelTokenAt(`x ${PANEL_TOKEN} y`, 0)).toBeUndefined();
+    expect(isSecretPlaceholder(PANEL_TOKEN)).toBe(true);
+    expect(isSecretPlaceholder(PANEL_REDACTED)).toBe(true);
+    expect(isSecretPlaceholder(REDACTED)).toBe(true);
+
+    const notTokens = [
+      `${PANEL_REDACTED}K7F3K9Q2M4X__`,
+      `${PANEL_REDACTED}K7F3K9Q2M4XAB__`,
+      `${PANEL_REDACTED}k7f3k9q2m4xa__`,
+      `${PANEL_REDACTED}K7F3K9Q2M4X-__`,
+      `${PANEL_REDACTED}K7F3K9Q2M4XA_`,
+      `${PANEL_TOKEN}x`,
+      `x${PANEL_TOKEN}`,
+      "",
+    ];
+    for (const value of notTokens) {
+      expect(isSecretPlaceholder(value), value).toBe(false);
+    }
+    expectScrubbed(`password: "${SECRET}${PANEL_TOKEN}"`, 'password: "[REDACTED]"');
+    expectScrubbed(`API_TOKEN='${PANEL_TOKEN} ${SECRET}'`, "API_TOKEN='[REDACTED]'");
+  });
+
   it("returns its own output unchanged", () => {
     const corpus = [
       `DB_PASSWORD=${SECRET}`,
@@ -327,6 +394,8 @@ describe("scrubSecrets: placeholders and idempotence", () => {
       `SSH_KEY="${FAKE_PEM}"\nNEXT_TOKEN=${SECRET}`,
       `password: "unterminated ${SECRET}\nsecret: '${SECRET}`,
       `"token": ${SECRET}]} trailing`,
+      `A_SECRET: ${PANEL_TOKEN}\nB_SECRET: ${SECRET}\npostgres://app:${PANEL_TOKEN}@db/app`,
+      `- API_KEY=${PANEL_TOKEN}\n- OTHER_KEY=${SECRET}${PANEL_TOKEN}`,
     ];
     for (const input of corpus) {
       const once = scrubSecrets(input);
@@ -364,6 +433,8 @@ describe("scrubSecrets: placeholders and idempotence", () => {
       `\${VAR:-fallback}`,
       REDACTED,
       PANEL_REDACTED,
+      PANEL_TOKEN,
+      "K7F3K9Q2M4XA__",
       "https://u:p@h/x",
       "export ",
       "- ",

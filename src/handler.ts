@@ -15,7 +15,12 @@ import { getClientConfig } from "./utils/clientConfig.js";
 import { createLogger } from "./utils/logger.js";
 import { redactSensitive } from "./utils/redactSensitive.js";
 import { type FormattedResponse, ResponseFormatter } from "./utils/responseFormatter.js";
-import { SECRET_PLACEHOLDERS } from "./utils/scrubSecrets.js";
+import {
+  PANEL_REDACTED,
+  panelTokenAt,
+  REDACTED,
+  SECRET_PLACEHOLDERS,
+} from "./utils/scrubSecrets.js";
 
 const logger = createLogger("ToolHandler");
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 502, 503, 504]);
@@ -31,6 +36,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // logged input only: in a tool result a compose file is scrubbed but stays
 // readable, and "variables" or "set" name safe metadata.
 const LOG_ONLY_REDACT_FIELDS = ["composeFile", "dockerCompose"];
+
+// The only inputs whose text the panel restores on save: a token left where it
+// was keeps the hidden value. Anywhere else a token would be stored literally.
+const TOKEN_WRITE_BACK_FIELDS = new Map([
+  ["compose-update", "composeFile"],
+  ["mounts-update", "content"],
+]);
 
 function getLoggedInputRedactFields(tool: ToolDefinition): string[] {
   if (tool.execution?.kind === "compose-env-upsert" || tool.name === "application-env-upsert") {
@@ -55,7 +67,7 @@ function invalidInput(tool: ToolDefinition): FormattedResponse {
 function redactedTextWriteBack(tool: ToolDefinition): FormattedResponse {
   return ResponseFormatter.error(
     `Invalid input for ${tool.name}`,
-    "The input contains redacted text ([REDACTED] or __DOKPLOY_REDACTED_SECRET__). It stands in for a secret this server never shows and cannot be written back. Leave the field out to keep the stored value. In a compose file, replace the inline secret with a variable reference and set that variable with env-apply.",
+    "The input contains redacted text that cannot be written back. [REDACTED] and the bare __DOKPLOY_REDACTED_SECRET__ stand in for a secret this server never shows and can never be written back: leave the field out to keep the stored value. Tokens of the form __DOKPLOY_REDACTED_SECRET__XXXXXXXXXXXX__ may be sent back unchanged, each where it was, only in a compose file (compose-update, field composeFile) or a file mount (mounts-update, field content): the panel then keeps the hidden value. Never invent or alter a token. To change a secret in a compose file, replace the inline value with a variable reference and set that variable with env-apply.",
   );
 }
 
@@ -74,6 +86,33 @@ function containsSecretPlaceholder(value: unknown): boolean {
     return value.some(containsSecretPlaceholder);
   }
   return isRecord(value) && Object.values(value).some(containsSecretPlaceholder);
+}
+
+function hasOnlyRestorableTokens(text: string): boolean {
+  if (text.includes(REDACTED)) return false;
+
+  let tokenEnd = 0;
+  for (
+    let index = text.indexOf(PANEL_REDACTED);
+    index !== -1;
+    index = text.indexOf(PANEL_REDACTED, index + 1)
+  ) {
+    const token = panelTokenAt(text, index);
+    // A placeholder that starts inside the previous token shares its closing
+    // "__", so one of the two is not what the panel issued.
+    if (token === undefined || index < tokenEnd) return false;
+    tokenEnd = index + token.length;
+  }
+  return true;
+}
+
+function containsForbiddenPlaceholder(tool: ToolDefinition, input: Record<string, unknown>) {
+  const restorableField = TOKEN_WRITE_BACK_FIELDS.get(tool.name);
+  return Object.entries(input).some(([field, value]) =>
+    field === restorableField && typeof value === "string"
+      ? !hasOnlyRestorableTokens(value)
+      : containsSecretPlaceholder(value),
+  );
 }
 
 function getHttpStatus(error: unknown): number | undefined {
@@ -291,7 +330,7 @@ function conflictDetails(tool: ToolDefinition): string {
 
 export function createHandler(tool: ToolDefinition) {
   return async (rawInput: Record<string, unknown>) => {
-    if (containsSecretPlaceholder(rawInput)) {
+    if (containsForbiddenPlaceholder(tool, rawInput)) {
       return redactedTextWriteBack(tool);
     }
 

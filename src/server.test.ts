@@ -49,6 +49,8 @@ function countByTags(tags: string[]): number {
 }
 
 const SECRET = "fake-value-7Qx";
+const PANEL_TOKEN = "__DOKPLOY_REDACTED_SECRET__K7F3K9Q2M4XA__";
+const OTHER_PANEL_TOKEN = "__DOKPLOY_REDACTED_SECRET__AAAABBBB2345__";
 
 const RECOVERY_PATHS = [
   "/compose/env/upsert",
@@ -1442,6 +1444,148 @@ describe("MCP server tools/list", () => {
     }
     expect(apiClient.post).not.toHaveBeenCalled();
     expect(apiClient.get).not.toHaveBeenCalled();
+  });
+
+  it("lets restorable tokens through in a compose file and keeps them in the reply", async () => {
+    const composeFile = [
+      "services:",
+      "  web:",
+      "    environment:",
+      `      PASSWORD: ${PANEL_TOKEN}`,
+      `      - API_KEY=${OTHER_PANEL_TOKEN}`,
+      `      DATABASE_URL: postgres://app:${PANEL_TOKEN}@db/app`,
+      "",
+    ].join("\n");
+    mocked(apiClient.post).mockResolvedValueOnce({ data: { composeId: "compose_1", composeFile } });
+
+    const { result, logs } = await callToolCapturingLogs("compose-update", {
+      composeId: "compose_1",
+      composeFile,
+    });
+
+    expect(apiClient.post).toHaveBeenCalledWith("/compose.update", {
+      composeId: "compose_1",
+      composeFile,
+    });
+    expect(result.isError).toBeUndefined();
+    expect(resultData(result)).toEqual({ composeId: "compose_1", composeFile });
+    expect(logs).toContain('"input":{"composeId":"compose_1","composeFile":"[REDACTED]"}');
+  });
+
+  it("lets restorable tokens through in a file mount", async () => {
+    const content = `token = "${PANEL_TOKEN}"\nother = "${OTHER_PANEL_TOKEN}"\n${PANEL_TOKEN}${OTHER_PANEL_TOKEN}\n`;
+    mocked(apiClient.post).mockResolvedValueOnce({ data: { mountId: "mount_1", content } });
+
+    const { result } = await callToolCapturingLogs("mounts-update", {
+      mountId: "mount_1",
+      content,
+    });
+
+    expect(apiClient.post).toHaveBeenCalledWith("/mounts.update", { mountId: "mount_1", content });
+    expect(result.isError).toBeUndefined();
+    expect(resultData(result)).toEqual({ mountId: "mount_1", content });
+  });
+
+  it("rejects a token field that also holds a placeholder that cannot be restored", async () => {
+    const bare = "__DOKPLOY_REDACTED_SECRET__";
+    const texts = [
+      `A: ${PANEL_TOKEN}\nB: ${bare}\n`,
+      `A: ${bare}\nB: ${PANEL_TOKEN}\n`,
+      `A: ${PANEL_TOKEN}\nB: [REDACTED]\n`,
+      `A: ${PANEL_TOKEN}${bare}`,
+      `A: ${bare}${PANEL_TOKEN}`,
+      `A: ${PANEL_TOKEN.slice(0, -2)}${OTHER_PANEL_TOKEN}`,
+      `A: ${bare}K7F3K9Q2M4X__`,
+      `A: ${bare}K7F3K9Q2M4XAB__`,
+      `A: ${bare}k7f3k9q2m4xa__`,
+      `A: ${bare}K7F3K9Q2M4XA_`,
+      `A: ${bare}K7F3K9Q2M4XA`,
+    ];
+
+    for (const text of texts) {
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ["compose-update", { composeId: "compose_1", composeFile: text }],
+        ["mounts-update", { mountId: "mount_1", content: text }],
+      ];
+      for (const [tool, args] of cases) {
+        const { result, logs } = await callToolCapturingLogs(tool, args);
+
+        expect(result.isError, `${tool}: ${text}`).toBe(true);
+        expect(resultText(result)).toContain("cannot be written back");
+        expect(logs).toBe("");
+      }
+    }
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it("rejects a restorable token in every other tool and field", async () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["compose-update", { composeId: "compose_1", description: PANEL_TOKEN }],
+      ["compose-update", { composeId: PANEL_TOKEN, composeFile: "services: {}\n" }],
+      ["compose-update", { composeId: "compose_1", composeFile: "a: b\n", name: PANEL_TOKEN }],
+      [
+        "compose-create",
+        { name: "demo", environmentId: "environment_1", composeFile: `A: ${PANEL_TOKEN}\n` },
+      ],
+      ["mounts-update", { mountId: "mount_1", filePath: PANEL_TOKEN }],
+      ["mounts-update", { mountId: "mount_1", content: "plain", hostPath: `/x/${PANEL_TOKEN}` }],
+      [
+        "mounts-create",
+        {
+          type: "file",
+          content: PANEL_TOKEN,
+          mountPath: "/app/config",
+          serviceType: "compose",
+          serviceId: "compose_1",
+        },
+      ],
+      ["application-update", { applicationId: "app_1", description: PANEL_TOKEN }],
+      ["application-one", { applicationId: PANEL_TOKEN }],
+      [
+        "docker-writeContainerFile",
+        { containerId: "container1", path: "/a", content: PANEL_TOKEN },
+      ],
+      ["application-env-upsert", { applicationId: "app_1", variables: { A: PANEL_TOKEN } }],
+      ["env-apply", { scope: "application", id: "app_1", set: { API_TOKEN: PANEL_TOKEN } }],
+    ];
+
+    for (const [tool, args] of cases) {
+      const { result, logs } = await callToolCapturingLogs(tool, args);
+
+      expect(result.isError, tool).toBe(true);
+      expect(resultText(result)).toContain(`Invalid input for ${tool}`);
+      expect(resultText(result)).toContain("cannot be written back");
+      expect(logs).toBe("");
+    }
+    expect(apiClient.post).not.toHaveBeenCalled();
+    expect(apiClient.get).not.toHaveBeenCalled();
+  });
+
+  it("explains in the rejection where a token may be sent back", async () => {
+    const { result } = await callToolCapturingLogs("application-update", {
+      applicationId: "app_1",
+      description: PANEL_TOKEN,
+    });
+    const text = resultText(result);
+
+    expect(text).toContain("__DOKPLOY_REDACTED_SECRET__XXXXXXXXXXXX__ may be sent back unchanged");
+    expect(text).toContain("compose-update, field composeFile");
+    expect(text).toContain("mounts-update, field content");
+    expect(text).toContain("Never invent or alter a token");
+    expect(text).toContain("[REDACTED] and the bare __DOKPLOY_REDACTED_SECRET__");
+    expect(text).toContain("can never be written back");
+    expect(text).not.toContain(PANEL_TOKEN);
+  });
+
+  it("tells the client in the server instructions how hidden values work", async () => {
+    const client = await getSharedClient();
+    const instructions = client.getInstructions() ?? "";
+
+    expect(instructions).toContain("Secret values are hidden");
+    expect(instructions).toContain("env-keys");
+    expect(instructions).toContain("env-apply");
+    expect(instructions).toContain("__DOKPLOY_REDACTED_SECRET__XXXXXXXXXXXX__");
+    expect(instructions).toContain("compose-update or mounts-update");
   });
 
   it("lists the blind env tools with their schemas and annotations", async () => {

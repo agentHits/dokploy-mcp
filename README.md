@@ -327,14 +327,17 @@ DOKPLOY_CUSTOM_HEADERS='{"CF-Access-Client-Id":"your-client-id.access","CF-Acces
 
 The server removes secret values from every tool result and from its own log. This cannot be switched off.
 
-- **Secret fields.** The built-in field list above is redacted at any depth. A string becomes `[REDACTED]`; booleans, numbers, `null` and empty strings are kept, so flags such as `secret: true` stay readable. Variable lists (`env`, `buildArgs`, `buildSecrets`, docker `Env`) keep the variable names: `NAME=[REDACTED]`.
+- **Secret fields.** The built-in field list above is redacted at any depth. A string becomes `[REDACTED]`; booleans, numbers, `null`, empty strings and values the panel has already hidden are kept, so flags such as `secret: true` stay readable. Variable lists (`env`, `buildArgs`, `buildSecrets`, docker `Env`) keep the variable names: `NAME=[REDACTED]`.
 - **Free text.** Every other string is scrubbed: logs, compose files, Traefik and container files (base64 file content is decoded, scrubbed and encoded again; binary content is replaced), error text. Values of secret-looking names in `NAME=value`, `key: value` and JSON, URL passwords, `Authorization` and `Bearer` tokens, `--password`-style flags, well-known token formats and PEM private keys become `[REDACTED]`. Variable references such as `${VAR}` and `${{project.VAR}}` are kept; an inline default (`${VAR:-default}`) is redacted.
 - **Blind env tools.** `env-keys` lists variable names with `secret` and `empty` flags. `env-apply` changes single variables and never returns a value: `set` a value that is already known, `generate` a random secret on the server, `copy` a value from another service, `remove` a variable. A secret that only the user knows is entered in the Dokploy panel, not in the chat. Changes apply after a redeploy. Both tools, like `superPassword-status`, are loaded with every preset and tag filter. They need a Dokploy version that provides `GET /env.keys` and `POST /env.apply`.
 - **No full-replace writes.** Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv`) are not listed. Every other tool rejects the fields `env`, `buildArgs`, `buildSecrets`, `previewEnv`, `previewBuildArgs` and `previewBuildSecrets`, because writing them would replace variables the model cannot see.
-- **No write-back of redacted text.** An input that contains `[REDACTED]` or `__DOKPLOY_REDACTED_SECRET__` is rejected.
+- **No write-back of redacted text.** An input that contains `[REDACTED]` or the bare `__DOKPLOY_REDACTED_SECRET__` is rejected.
+- **Restorable tokens.** In a compose file or a file mount the panel can hide a value behind a token of the form `__DOKPLOY_REDACTED_SECRET__XXXXXXXXXXXX__`. The server passes tokens through unchanged, and a token sent back where it was with `compose-update` (field `composeFile`) or `mounts-update` (field `content`) keeps the stored value: the panel restores it on save. Tokens are rejected in every other tool and field, must not be invented or altered, and cannot be mixed with `[REDACTED]` or the bare placeholder in the same text.
 - **Errors.** The body of a failed API response is never passed on. The model gets a fixed message per status.
 
 The free-text scrubber works from names and formats. A secret stored in a file under a neutral name (`FOO: value`) is not recognised, so keep secrets in env variables and reference them.
+
+An agent that also has SSH access to a server can read the same secrets from a shell. [`guard/`](guard/README.md) holds Claude Code hooks that block the usual ways this happens by accident (`docker inspect`, `printenv`, `cat .env`, database dumps to the terminal) and scrub the output of SSH MCP tools. They are not a security boundary; a restricted server account is.
 
 ## Transport Modes
 

@@ -1,4 +1,10 @@
-import { isSensitiveFlag, REDACTED, redactValue, scrubSecrets } from "./scrubSecrets.js";
+import {
+  isSecretPlaceholder,
+  isSensitiveFlag,
+  REDACTED,
+  redactValue,
+  scrubSecrets,
+} from "./scrubSecrets.js";
 
 export const BASELINE_REDACTED_FIELDS: readonly string[] = [
   "env",
@@ -118,6 +124,12 @@ function endsWithAny(key: string, suffixes: string[]): boolean {
   return suffixes.some((suffix) => key.endsWith(suffix));
 }
 
+// A value that is already a placeholder stays as it is: swapping a restorable
+// panel token for "[REDACTED]" would make the stored value unrecoverable.
+function hide(value: string): string {
+  return isSecretPlaceholder(value) ? value : REDACTED;
+}
+
 function closesQuote(text: string, from: number, quote: string): boolean {
   for (let i = from; i < text.length; i++) {
     if (text[i] === "\\" && quote === '"') {
@@ -141,7 +153,7 @@ function redactEnvText(text: string): string {
     const match = ENV_ASSIGNMENT.exec(line);
     if (!match) return REDACTED;
     const [, name, value = ""] = match;
-    variables.push(value === "" ? `${name}=` : `${name}=${REDACTED}`);
+    variables.push(value === "" ? `${name}=` : `${name}=${hide(value.trimEnd())}`);
 
     const quote = value[0];
     if ((quote === '"' || quote === "'" || quote === "`") && !closesQuote(value, 1, quote)) {
@@ -159,7 +171,7 @@ function redactEnvItems(items: unknown[]): unknown {
   for (const item of items) {
     const match = typeof item === "string" ? ENV_ITEM.exec(item) : null;
     if (!match) return REDACTED;
-    redacted.push(match[2] === "" ? `${match[1]}=` : `${match[1]}=${REDACTED}`);
+    redacted.push(match[2] ? `${match[1]}=${hide(match[2])}` : `${match[1]}=`);
   }
   return redacted;
 }
@@ -168,7 +180,11 @@ function redactMapValues(map: Record<string, unknown>): Record<string, unknown> 
   const out: Record<string, unknown> = Object.create(null);
   for (const [key, value] of Object.entries(map)) {
     if (isUnsafeKey(key)) continue;
-    out[key] = value === null || value === undefined || value === "" ? value : REDACTED;
+    if (value === null || value === undefined || value === "") {
+      out[key] = value;
+    } else {
+      out[key] = typeof value === "string" ? hide(value) : REDACTED;
+    }
   }
   return out;
 }
@@ -176,7 +192,7 @@ function redactMapValues(map: Record<string, unknown>): Record<string, unknown> 
 function redactUnderSensitiveKey(value: unknown, keepsNames: boolean): unknown {
   if (typeof value === "string") {
     if (value === "") return value;
-    return keepsNames ? redactEnvText(value) : REDACTED;
+    return keepsNames ? redactEnvText(value) : hide(value);
   }
   if (Array.isArray(value)) {
     if (value.length === 0) return value;

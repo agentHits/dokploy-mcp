@@ -1,6 +1,11 @@
 export const REDACTED = "[REDACTED]";
 export const PANEL_REDACTED = "__DOKPLOY_REDACTED_SECRET__";
 export const SECRET_PLACEHOLDERS = [PANEL_REDACTED, REDACTED] as const;
+// The panel marks a hidden value it can restore on write-back with a token:
+// the bare placeholder, a 12-character id and a closing "__". The id is base32
+// (A-Z, 2-7); the other digits are accepted too, because whether a token exists
+// is the panel's call and a wider shape here cannot reveal anything.
+const PANEL_TOKEN = /__DOKPLOY_REDACTED_SECRET__[A-Z0-9]{12}__/y;
 
 const SENSITIVE_NAME =
   /access[_-]?key|api[_-]?key|auth|credential|private[_-]?key|token|secret|password|passwd|pwd|pass|dsn|cookie|session|signature|salt|webhook|license|encryption|jwt/i;
@@ -38,6 +43,24 @@ interface Span {
   start: number;
   end: number;
   replacement: string;
+}
+
+/** The restorable panel token that starts exactly at `index`, if any. */
+export function panelTokenAt(text: string, index: number): string | undefined {
+  PANEL_TOKEN.lastIndex = index;
+  return PANEL_TOKEN.exec(text)?.[0];
+}
+
+function placeholderAt(text: string, index: number): string | undefined {
+  return (
+    panelTokenAt(text, index) ??
+    SECRET_PLACEHOLDERS.find((placeholder) => text.startsWith(placeholder, index))
+  );
+}
+
+/** True when the whole value is `[REDACTED]`, the panel placeholder or a panel token. */
+export function isSecretPlaceholder(value: string): boolean {
+  return placeholderAt(value, 0) === value;
 }
 
 export function isSensitiveName(name: string): boolean {
@@ -81,12 +104,7 @@ function redactReference(value: string, depth: number): string | null {
  * placeholders are not secrets and are returned unchanged.
  */
 export function redactValue(value: string, depth = 0): string {
-  if (
-    value === "" ||
-    value === REDACTED ||
-    value === PANEL_REDACTED ||
-    NON_SECRET_LITERAL.test(value)
-  ) {
+  if (value === "" || isSecretPlaceholder(value) || NON_SECRET_LITERAL.test(value)) {
     return value;
   }
 
@@ -115,10 +133,6 @@ function skipBlanks(text: string, from: number): number {
 function endsLine(text: string, index: number): boolean {
   const char = text[index];
   return char === undefined || char === "\n" || char === "\r";
-}
-
-function placeholderAt(text: string, index: number): string | undefined {
-  return SECRET_PLACEHOLDERS.find((placeholder) => text.startsWith(placeholder, index));
 }
 
 function trimmedLineEnd(text: string, from: number): number {

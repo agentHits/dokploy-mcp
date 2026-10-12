@@ -519,3 +519,74 @@ describe("redactSensitive: base64 file content", () => {
     });
   });
 });
+
+describe("redactSensitive: values that are already hidden", () => {
+  const PANEL_BARE = "__DOKPLOY_REDACTED_SECRET__";
+  const PANEL_TOKEN = `${PANEL_BARE}K7F3K9Q2M4XA__`;
+  const PLACEHOLDERS = [PANEL_TOKEN, PANEL_BARE, "[REDACTED]"];
+
+  it("keeps a compose file and a file mount with tokens byte for byte", () => {
+    const composeFile = [
+      "services:",
+      "  web:",
+      "    environment:",
+      `      PASSWORD: ${PANEL_TOKEN}`,
+      `      - API_KEY=${PANEL_TOKEN}`,
+      `      DATABASE_URL: postgres://app:${PANEL_TOKEN}@db/app`,
+      `    command: ["worker", "--api-token", "${PANEL_TOKEN}"]`,
+    ].join("\n");
+    const data = {
+      composeId: "compose_1",
+      composeFile,
+      mounts: [{ mountId: "mount_1", type: "file", content: `token = "${PANEL_TOKEN}"\n` }],
+    };
+
+    expect(redactSensitive(data)).toEqual(data);
+  });
+
+  it("keeps a placeholder under a secret field instead of replacing it", () => {
+    for (const placeholder of PLACEHOLDERS) {
+      const data = {
+        password: placeholder,
+        apiKey: placeholder,
+        credentials: { username: placeholder },
+        env: `A_TOKEN=${placeholder}\nEMPTY=`,
+        Config: { Env: [`DB_PASSWORD=${placeholder}`] },
+        Args: ["server", "--requirepass", placeholder],
+      };
+      expect(redactSensitive(data), placeholder).toEqual(data);
+    }
+  });
+
+  it("still redacts a secret that only contains a placeholder", () => {
+    for (const placeholder of PLACEHOLDERS) {
+      const result = redactSensitive({
+        password: `${SECRET}${placeholder}`,
+        env: `A_TOKEN=${placeholder}${SECRET}`,
+        Config: { Env: [`DB_PASSWORD=${placeholder} ${SECRET}`] },
+        credentials: { username: `x${placeholder}` },
+      });
+      expect(result, placeholder).toEqual({
+        password: "[REDACTED]",
+        env: "A_TOKEN=[REDACTED]",
+        Config: { Env: ["DB_PASSWORD=[REDACTED]"] },
+        credentials: { username: "[REDACTED]" },
+      });
+    }
+  });
+
+  it("returns its own output unchanged", () => {
+    const data = {
+      password: SECRET,
+      env: `A_TOKEN=${SECRET}\nB_TOKEN=${PANEL_TOKEN}`,
+      Config: { Env: [`DB_PASSWORD=${SECRET}`, `API_KEY=${PANEL_TOKEN}`] },
+      composeFile: `PASSWORD: ${PANEL_TOKEN}\nOTHER_SECRET: ${SECRET}\n`,
+      logs: `postgres://app:${SECRET}@db/app postgres://app:${PANEL_TOKEN}@db/app`,
+    };
+    const once = redactSensitive(data);
+
+    expect(JSON.stringify(once)).not.toContain(SECRET);
+    expect(JSON.stringify(once)).toContain(PANEL_TOKEN);
+    expect(redactSensitive(once)).toEqual(once);
+  });
+});
