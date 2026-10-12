@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { ZodObject, ZodRawShape } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { envApplyTool, envKeysTool, requiresFullEnvText } from "./envTools.js";
 import { generatedTools } from "./generated/tools.js";
 import { createHandler } from "./handler.js";
 import { superPasswordStatusTool } from "./superPassword.js";
@@ -12,6 +13,12 @@ const logger = createLogger("MCP-Server");
 
 const JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema";
 const LARGE_TOOLSET_WARNING_THRESHOLD = 150;
+
+const SERVER_INSTRUCTIONS = [
+  "Secret values are hidden in every result of this server: they show up as [REDACTED] or __DOKPLOY_REDACTED_SECRET__ and cannot be read here.",
+  "List variable names with env-keys and set, generate, copy or remove single variables with env-apply.",
+  "In a compose file or a file mount a hidden value can appear as a token of the form __DOKPLOY_REDACTED_SECRET__XXXXXXXXXXXX__: send it back unchanged, where it was, with compose-update or mounts-update to keep the stored value, and never invent or alter a token.",
+].join(" ");
 
 const TOOL_PRESETS = {
   all: null,
@@ -92,10 +99,20 @@ function getEnabledTools() {
 // closed super password. Every other superPassword procedure (set, unlock,
 // reset) stays out even if a spec sync generates it: the super password must
 // never pass through the model.
-function withSuperPasswordStatus(tools: ToolDefinition[]): ToolDefinition[] {
+//
+// The blind env tools are always loaded too: they are the only way left to
+// manage variables, because tools that need a whole env text are dropped. A
+// generated tool with the "env" tag would bypass their checks, so it stays out
+// the same way.
+const ALWAYS_LOADED_TOOLS = [superPasswordStatusTool, envKeysTool, envApplyTool];
+const HAND_WRITTEN_TAGS = new Set(ALWAYS_LOADED_TOOLS.map((tool) => tool.tag.toLowerCase()));
+
+function withAlwaysLoadedTools(tools: ToolDefinition[]): ToolDefinition[] {
   return [
-    ...tools.filter((tool) => tool.tag.toLowerCase() !== superPasswordStatusTool.tag.toLowerCase()),
-    superPasswordStatusTool,
+    ...tools.filter(
+      (tool) => !HAND_WRITTEN_TAGS.has(tool.tag.toLowerCase()) && !requiresFullEnvText(tool),
+    ),
+    ...ALWAYS_LOADED_TOOLS,
   ];
 }
 
@@ -166,12 +183,15 @@ function toDraft2020_12JsonSchema(schema: ZodObject<ZodRawShape>): Record<string
 }
 
 export function createServer() {
-  const server = new McpServer({
-    name: "dokploy",
-    version: "2.0.0",
-  });
+  const server = new McpServer(
+    {
+      name: "dokploy",
+      version: "2.0.0",
+    },
+    { instructions: SERVER_INSTRUCTIONS },
+  );
 
-  const tools = withSuperPasswordStatus(getEnabledTools());
+  const tools = withAlwaysLoadedTools(getEnabledTools());
 
   for (const tool of tools) {
     server.tool(

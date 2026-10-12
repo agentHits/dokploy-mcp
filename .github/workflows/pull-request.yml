@@ -1,0 +1,43 @@
+name: Pull request checks
+
+on:
+  pull_request:
+    branches: [AgentHits-Dev]
+  push:
+    branches: [AgentHits-Dev]
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: lint, types, tests and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Type check
+        run: bun run type-check
+
+      - name: Tests
+        run: bun test
+
+      - name: Build
+        run: bun run build

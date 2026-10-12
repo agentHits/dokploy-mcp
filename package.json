@@ -24,7 +24,7 @@
     "lint:fix": "biome check --write",
     "format": "biome format --write",
     "format:check": "biome format",
-    "type-check": "tsc --noEmit",
+    "type-check": "tsc --noEmit && tsc --noEmit -p guard",
     "clean": "rm -rf build",
     "precommit": "biome check && bun run type-check",
     "test": "bun test"

@@ -20,15 +20,37 @@ const { default: apiClient } = await import("./utils/apiClient.js");
 const { generatedTools } = await import("./generated/tools.js");
 const { createServer } = await import("./server.js");
 
-// superPassword-status is loaded on top of every preset and tag filter.
-const ALWAYS_LOADED_TOOLS = 1;
+// superPassword-status, env-keys and env-apply are loaded on top of every
+// preset and tag filter.
+const ALWAYS_LOADED_TOOLS = 3;
+
+// Tools that need a whole env text are never listed.
+const FULL_ENV_REPLACE_TOOLS = [
+  "application-saveEnvironment",
+  "compose-saveEnvironment",
+  "libsql-saveEnvironment",
+  "mariadb-saveEnvironment",
+  "mongo-saveEnvironment",
+  "mysql-saveEnvironment",
+  "postgres-saveEnvironment",
+  "redis-saveEnvironment",
+  "settings-writeTraefikEnv",
+];
+const listableGeneratedTools = generatedTools.filter(
+  (tool) => !FULL_ENV_REPLACE_TOOLS.includes(tool.name),
+);
 
 function countByTags(tags: string[]): number {
   const wanted = new Set(tags.map((tag) => tag.toLowerCase()));
   return (
-    generatedTools.filter((tool) => wanted.has(tool.tag.toLowerCase())).length + ALWAYS_LOADED_TOOLS
+    listableGeneratedTools.filter((tool) => wanted.has(tool.tag.toLowerCase())).length +
+    ALWAYS_LOADED_TOOLS
   );
 }
+
+const SECRET = "fake-value-7Qx";
+const PANEL_TOKEN = "__DOKPLOY_REDACTED_SECRET__K7F3K6Q2M4XA__";
+const OTHER_PANEL_TOKEN = "__DOKPLOY_REDACTED_SECRET__AAAABBBB2345__";
 
 const RECOVERY_PATHS = [
   "/compose/env/upsert",
@@ -112,7 +134,7 @@ describe("MCP server tools/list", () => {
 
   it("returns all tools by default", async () => {
     const tools = await getToolList();
-    expect(tools).toHaveLength(generatedTools.length + ALWAYS_LOADED_TOOLS);
+    expect(tools).toHaveLength(listableGeneratedTools.length + ALWAYS_LOADED_TOOLS);
   });
 
   it("supports DOKPLOY_TOOL_PRESET=minimal for clients sensitive to large toolsets", async () => {
@@ -122,7 +144,7 @@ describe("MCP server tools/list", () => {
     const tags = new Set(tools.map((tool) => tool.name.split("-")[0]));
 
     expect(tools).toHaveLength(countByTags(["project", "application"]));
-    expect(tags).toEqual(new Set(["application", "project", "superPassword"]));
+    expect(tags).toEqual(new Set(["application", "project", "superPassword", "env"]));
   });
 
   it("supports DOKPLOY_TOOL_PRESET=core for common application workflows", async () => {
@@ -132,7 +154,7 @@ describe("MCP server tools/list", () => {
     const tags = new Set(tools.map((tool) => tool.name.split("-")[0]));
 
     expect(tools).toHaveLength(countByTags(["project", "server", "application"]));
-    expect(tags).toEqual(new Set(["application", "project", "server", "superPassword"]));
+    expect(tags).toEqual(new Set(["application", "project", "server", "superPassword", "env"]));
   });
 
   it("lets DOKPLOY_ENABLED_TAGS override presets", async () => {
@@ -143,7 +165,7 @@ describe("MCP server tools/list", () => {
     const tags = new Set(tools.map((tool) => tool.name.split("-")[0]));
 
     expect(tools).toHaveLength(countByTags(["project", "application"]));
-    expect(tags).toEqual(new Set(["application", "project", "superPassword"]));
+    expect(tags).toEqual(new Set(["application", "project", "superPassword", "env"]));
   });
 
   it("excludes DOKPLOY_DISABLED_TAGS after selecting tools", async () => {
@@ -165,7 +187,7 @@ describe("MCP server tools/list", () => {
 
     const tools = await getToolList();
 
-    expect(tools).toHaveLength(generatedTools.length + ALWAYS_LOADED_TOOLS);
+    expect(tools).toHaveLength(listableGeneratedTools.length + ALWAYS_LOADED_TOOLS);
   });
 
   it("exposes deployment-readLogs for schedule deployment log inspection", async () => {
@@ -1071,6 +1093,994 @@ describe("MCP server tools/list", () => {
     });
     await client.close();
     expect(apiClient.post).toHaveBeenCalledTimes(1);
+  });
+
+  type ToolResult = Awaited<
+    ReturnType<Awaited<ReturnType<typeof createConnectedClient>>["callTool"]>
+  >;
+
+  // Building a server converts every tool schema, so the tests below share one
+  // client per test instead of connecting again for each call.
+  let sharedClient: Awaited<ReturnType<typeof createConnectedClient>> | undefined;
+
+  afterEach(async () => {
+    await sharedClient?.close();
+    sharedClient = undefined;
+  });
+
+  async function getSharedClient() {
+    sharedClient ??= await createConnectedClient();
+    return sharedClient;
+  }
+
+  async function callTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+    const client = await getSharedClient();
+    return client.callTool({ name, arguments: args });
+  }
+
+  async function callToolCapturingLogs(name: string, args: Record<string, unknown>) {
+    const client = await getSharedClient();
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await client.callTool({ name, arguments: args });
+      return { result, logs: consoleError.mock.calls.map((call) => String(call[0])).join("\n") };
+    } finally {
+      consoleError.mockRestore();
+    }
+  }
+
+  function resultData(result: ToolResult): Record<string, unknown> {
+    return JSON.parse(responseText(result as Parameters<typeof responseText>[0])).data;
+  }
+
+  function resultText(result: ToolResult): string {
+    return responseText(result as Parameters<typeof responseText>[0]);
+  }
+
+  const base64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
+  const fromBase64 = (value: unknown) => Buffer.from(String(value), "base64").toString("utf8");
+
+  it("redacts responses even though DOKPLOY_REDACT_ENV=false", async () => {
+    expect(process.env.DOKPLOY_REDACT_ENV).toBe("false");
+    mocked(apiClient.get).mockResolvedValueOnce({
+      data: {
+        applicationId: "app_1",
+        name: "web",
+        env: `# runtime\nAPI_TOKEN=${SECRET}\nPORT=3000`,
+        buildArgs: null,
+        previewEnv: "",
+        buildSecrets: `NPM_TOKEN=${SECRET}`,
+        password: SECRET,
+        refreshToken: SECRET,
+        secret: true,
+        isPreviewDeploymentsActive: false,
+        customGitUrl: `https://deploy:${SECRET}@git.example.test/org/repo.git`,
+        command: `node server.js --api-token ${SECRET}`,
+        compose: { composeFile: `services:\n  web:\n    environment:\n      A_TOKEN: ${SECRET}` },
+      },
+    });
+
+    const result = await callTool("application-one", { applicationId: "app_1" });
+
+    expect(resultText(result)).not.toContain(SECRET);
+    expect(resultData(result)).toEqual({
+      applicationId: "app_1",
+      name: "web",
+      env: "API_TOKEN=[REDACTED]\nPORT=[REDACTED]",
+      buildArgs: null,
+      previewEnv: "",
+      buildSecrets: "NPM_TOKEN=[REDACTED]",
+      password: "[REDACTED]",
+      refreshToken: "[REDACTED]",
+      secret: true,
+      isPreviewDeploymentsActive: false,
+      customGitUrl: "https://deploy:[REDACTED]@git.example.test/org/repo.git",
+      command: "node server.js --api-token [REDACTED]",
+      compose: { composeFile: "services:\n  web:\n    environment:\n      A_TOKEN: [REDACTED]" },
+    });
+  });
+
+  it("adds DOKPLOY_REDACT_FIELDS to the baseline instead of replacing it", async () => {
+    const { ConfigManager } = await import("./utils/clientConfig.js");
+    process.env.DOKPLOY_REDACT_FIELDS = "internalNote";
+    ConfigManager.resetInstance();
+    mocked(apiClient.get).mockResolvedValueOnce({
+      data: { name: "web", internalNote: "private", env: `A_TOKEN=${SECRET}`, password: SECRET },
+    });
+
+    try {
+      const result = await callTool("application-one", { applicationId: "app_1" });
+      expect(resultData(result)).toEqual({
+        name: "web",
+        internalNote: "[REDACTED]",
+        env: "A_TOKEN=[REDACTED]",
+        password: "[REDACTED]",
+      });
+    } finally {
+      delete process.env.DOKPLOY_REDACT_FIELDS;
+      ConfigManager.resetInstance();
+    }
+  });
+
+  it("scrubs secrets out of logs and other free text", async () => {
+    mocked(apiClient.get).mockResolvedValueOnce({
+      data: [
+        "starting",
+        `DATABASE_URL=postgres://app:${SECRET}@db:5432/app`,
+        `Authorization: Bearer ${SECRET}`,
+        `level=error msg="login failed" password=${SECRET}`,
+        "done",
+      ].join("\n"),
+    });
+
+    const result = await callTool("application-readLogs", { applicationId: "app_1" });
+    const logs = JSON.parse(resultText(result)).data;
+
+    expect(logs).toBe(
+      [
+        "starting",
+        "DATABASE_URL=postgres://app:[REDACTED]@db:5432/app",
+        "Authorization: Bearer [REDACTED]",
+        'level=error msg="login failed" password=[REDACTED]',
+        "done",
+      ].join("\n"),
+    );
+  });
+
+  it("scrubs error text that comes back inside a successful response", async () => {
+    mocked(apiClient.post).mockResolvedValueOnce({
+      data: { ok: false, error: `connect failed: redis://:${SECRET}@cache:6379`, attempts: 3 },
+    });
+
+    const result = await callTool("application-redeploy", { applicationId: "app_1" });
+
+    expect(resultData(result)).toEqual({
+      ok: false,
+      error: "connect failed: redis://:[REDACTED]@cache:6379",
+      attempts: 3,
+    });
+  });
+
+  it("keeps only variable names in a docker config", async () => {
+    mocked(apiClient.get).mockResolvedValueOnce({
+      data: {
+        Config: {
+          Env: ["PATH=/usr/local/bin", `DB_PASSWORD=${SECRET}`],
+          Cmd: ["redis-server", "--requirepass", SECRET],
+          Tty: false,
+        },
+      },
+    });
+
+    const result = await callTool("docker-getConfig", { containerId: "container1" });
+
+    expect(resultData(result)).toEqual({
+      Config: {
+        Env: ["PATH=[REDACTED]", "DB_PASSWORD=[REDACTED]"],
+        Cmd: ["redis-server", "--requirepass", "[REDACTED]"],
+        Tty: false,
+      },
+    });
+  });
+
+  it("scrubs base64 file content and replaces binary files", async () => {
+    for (const [tool, args] of [
+      ["docker-readContainerFile", { containerId: "container1", path: "/app/.env" }],
+      ["dockerVolume-readVolumeFile", { volumeName: "data", path: "/config.yml" }],
+    ] as const) {
+      mocked(apiClient.get).mockResolvedValueOnce({
+        data: {
+          content: base64(`API_TOKEN=${SECRET}\npassword: ${SECRET}\nPORT=3000\n`),
+          truncated: false,
+        },
+      });
+      const textResult = await callTool(tool, args);
+      const textData = resultData(textResult);
+      expect(textData.truncated).toBe(false);
+      expect(fromBase64(textData.content)).toBe(
+        "API_TOKEN=[REDACTED]\npassword: [REDACTED]\nPORT=3000\n",
+      );
+
+      mocked(apiClient.get).mockResolvedValueOnce({
+        data: { content: Buffer.from([0, 1, 2, 255, 254]).toString("base64"), truncated: false },
+      });
+      const binaryResult = await callTool(tool, args);
+      expect(resultData(binaryResult)).toEqual({ content: "[REDACTED]", truncated: false });
+    }
+  });
+
+  it("redacts the output of execution-policy tools and keeps their flags", async () => {
+    mocked(apiClient.post).mockResolvedValueOnce({
+      data: { ...reconcileFixture(), resolvedRevision: `token=${SECRET}` },
+    });
+
+    const result = await callTool("deployment_reconcile", {
+      composeId: "compose_1",
+      operationId: "operation_1",
+      repair: false,
+    });
+
+    expect(resultText(result)).not.toContain(SECRET);
+    expect(resultData(result)).toEqual({
+      ...reconcileFixture(),
+      resolvedRevision: "token=[REDACTED]",
+      repairPerformed: false,
+      deployment: null,
+    });
+  });
+
+  it("never lists a tool that needs a whole env text, under any preset", async () => {
+    for (const preset of ["all", "deploy", "databases"]) {
+      process.env.DOKPLOY_TOOL_PRESET = preset;
+      const names = (await getToolList()).map(({ name }) => name);
+      for (const removed of FULL_ENV_REPLACE_TOOLS) {
+        expect(names).not.toContain(removed);
+      }
+      expect(names.filter((name) => name.endsWith("-saveEnvironment"))).toEqual([]);
+      expect(names).toContain("env-keys");
+      expect(names).toContain("env-apply");
+    }
+  });
+
+  it("derives the removed tools from the schemas that require an env text", async () => {
+    const { requiresFullEnvText } = await import("./envTools.js");
+    expect(generatedTools.filter(requiresFullEnvText).map(({ name }) => name)).toEqual(
+      FULL_ENV_REPLACE_TOOLS,
+    );
+  });
+
+  it("refuses to call a removed full-replace tool", async () => {
+    const result = await callTool("compose-saveEnvironment", {
+      composeId: "compose_1",
+      env: `A_TOKEN=${SECRET}`,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).not.toContain(SECRET);
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it("rejects every full env field on other tools before any request or log", async () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["application-update", { applicationId: "app_1", env: `A_TOKEN=${SECRET}` }],
+      ["application-update", { applicationId: "app_1", buildArgs: `A_TOKEN=${SECRET}` }],
+      ["application-update", { applicationId: "app_1", buildSecrets: `A_TOKEN=${SECRET}` }],
+      ["application-update", { applicationId: "app_1", previewEnv: `A_TOKEN=${SECRET}` }],
+      ["application-update", { applicationId: "app_1", previewBuildArgs: `A_TOKEN=${SECRET}` }],
+      ["application-update", { applicationId: "app_1", previewBuildSecrets: `A_TOKEN=${SECRET}` }],
+      ["compose-update", { composeId: "compose_1", env: `A_TOKEN=${SECRET}` }],
+      ["postgres-update", { postgresId: "postgres_1", env: `A_TOKEN=${SECRET}` }],
+      ["project-create", { name: "demo", env: `A_TOKEN=${SECRET}` }],
+      ["environment-update", { environmentId: "environment_1", env: `A_TOKEN=${SECRET}` }],
+      ["application-update", { applicationId: "app_1", env: "" }],
+      ["application-update", { applicationId: "app_1", env: null }],
+    ];
+
+    for (const [tool, args] of cases) {
+      const { result, logs } = await callToolCapturingLogs(tool, args);
+      const text = resultText(result);
+
+      expect(result.isError, tool).toBe(true);
+      expect(text).toContain(`${tool} cannot write env fields`);
+      expect(text).toContain("env-apply");
+      expect(text).not.toContain(SECRET);
+      expect(logs).not.toContain(SECRET);
+      expect(logs).not.toContain("Executing tool");
+    }
+    expect(apiClient.post).not.toHaveBeenCalled();
+    expect(apiClient.get).not.toHaveBeenCalled();
+  });
+
+  it("still lets other fields of an update tool through", async () => {
+    mocked(apiClient.post).mockResolvedValueOnce({ data: { applicationId: "app_1" } });
+
+    await callTool("application-update", { applicationId: "app_1", name: "web" });
+
+    expect(apiClient.post).toHaveBeenCalledWith("/application.update", {
+      applicationId: "app_1",
+      name: "web",
+    });
+  });
+
+  it("does not block composeFile writes, scrubs the file in the reply and keeps it out of the log", async () => {
+    const composeFile = `services:\n  web:\n    environment:\n      API_TOKEN: ${SECRET}\n      DB_PASSWORD: \${DB_PASSWORD}\n`;
+    const scrubbed = `services:\n  web:\n    environment:\n      API_TOKEN: [REDACTED]\n      DB_PASSWORD: \${DB_PASSWORD}\n`;
+    mocked(apiClient.post).mockResolvedValueOnce({ data: { composeId: "compose_1", composeFile } });
+
+    const { result, logs } = await callToolCapturingLogs("compose-update", {
+      composeId: "compose_1",
+      composeFile,
+    });
+
+    expect(apiClient.post).toHaveBeenCalledWith("/compose.update", {
+      composeId: "compose_1",
+      composeFile,
+    });
+    expect(result.isError).toBeUndefined();
+    expect(resultData(result)).toEqual({ composeId: "compose_1", composeFile: scrubbed });
+    expect(logs).toContain('"input":{"composeId":"compose_1","composeFile":"[REDACTED]"}');
+    expect(logs).not.toContain(SECRET);
+  });
+
+  it("rejects redacted text written back through any tool at any depth", async () => {
+    const monitoring = (token: string, include: string[]) => ({
+      metricsConfig: {
+        server: {
+          refreshRate: 5,
+          port: 4500,
+          token,
+          urlCallback: "https://panel.example.test/callback",
+          retentionDays: 7,
+          cronJob: "0 0 * * *",
+          thresholds: { cpu: 0, memory: 0 },
+        },
+        containers: { refreshRate: 5, services: { include } },
+      },
+    });
+
+    for (const placeholder of ["__DOKPLOY_REDACTED_SECRET__", "[REDACTED]"]) {
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ["compose-update", { composeId: "compose_1", composeFile: `a: ${placeholder}\n` }],
+        ["application-update", { applicationId: "app_1", description: `x ${placeholder} y` }],
+        ["admin-setupMonitoring", monitoring(placeholder, [])],
+        ["admin-setupMonitoring", monitoring("fixture-token", ["web", `x${placeholder}`])],
+        ["application-one", { applicationId: placeholder }],
+        [
+          "docker-writeContainerFile",
+          { containerId: "container1", path: "/a", content: placeholder },
+        ],
+        ["application-env-upsert", { applicationId: "app_1", variables: { A: `v${placeholder}` } }],
+      ];
+
+      for (const [tool, args] of cases) {
+        const { result, logs } = await callToolCapturingLogs(tool, args);
+        const text = resultText(result);
+
+        expect(result.isError, tool).toBe(true);
+        expect(text).toContain(`Invalid input for ${tool}`);
+        expect(text).toContain("cannot be written back");
+        expect(logs).toBe("");
+      }
+    }
+    expect(apiClient.post).not.toHaveBeenCalled();
+    expect(apiClient.get).not.toHaveBeenCalled();
+  });
+
+  it("lets restorable tokens through in a compose file and keeps them in the reply", async () => {
+    const composeFile = [
+      "services:",
+      "  web:",
+      "    environment:",
+      `      PASSWORD: ${PANEL_TOKEN}`,
+      `      - API_KEY=${OTHER_PANEL_TOKEN}`,
+      `      DATABASE_URL: postgres://app:${PANEL_TOKEN}@db/app`,
+      "",
+    ].join("\n");
+    mocked(apiClient.post).mockResolvedValueOnce({ data: { composeId: "compose_1", composeFile } });
+
+    const { result, logs } = await callToolCapturingLogs("compose-update", {
+      composeId: "compose_1",
+      composeFile,
+    });
+
+    expect(apiClient.post).toHaveBeenCalledWith("/compose.update", {
+      composeId: "compose_1",
+      composeFile,
+    });
+    expect(result.isError).toBeUndefined();
+    expect(resultData(result)).toEqual({ composeId: "compose_1", composeFile });
+    expect(logs).toContain('"input":{"composeId":"compose_1","composeFile":"[REDACTED]"}');
+  });
+
+  it("lets restorable tokens through in a file mount", async () => {
+    const content = `token = "${PANEL_TOKEN}"\nother = "${OTHER_PANEL_TOKEN}"\n${PANEL_TOKEN}${OTHER_PANEL_TOKEN}\n`;
+    mocked(apiClient.post).mockResolvedValueOnce({ data: { mountId: "mount_1", content } });
+
+    const { result } = await callToolCapturingLogs("mounts-update", {
+      mountId: "mount_1",
+      content,
+    });
+
+    expect(apiClient.post).toHaveBeenCalledWith("/mounts.update", { mountId: "mount_1", content });
+    expect(result.isError).toBeUndefined();
+    expect(resultData(result)).toEqual({ mountId: "mount_1", content });
+  });
+
+  it("rejects a token field that also holds a placeholder that cannot be restored", async () => {
+    const bare = "__DOKPLOY_REDACTED_SECRET__";
+    const texts = [
+      `A: ${PANEL_TOKEN}\nB: ${bare}\n`,
+      `A: ${bare}\nB: ${PANEL_TOKEN}\n`,
+      `A: ${PANEL_TOKEN}\nB: [REDACTED]\n`,
+      `A: ${PANEL_TOKEN}${bare}`,
+      `A: ${bare}${PANEL_TOKEN}`,
+      `A: ${PANEL_TOKEN.slice(0, -2)}${OTHER_PANEL_TOKEN}`,
+      `A: ${bare}K7F3K9Q2M4X__`,
+      `A: ${bare}K7F3K6Q2M4XAB__`,
+      `A: ${bare}k7f3k9q2m4xa__`,
+      `A: ${bare}K7F3K6Q2M4XA_`,
+      `A: ${bare}K7F3K6Q2M4XA`,
+    ];
+
+    for (const text of texts) {
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ["compose-update", { composeId: "compose_1", composeFile: text }],
+        ["mounts-update", { mountId: "mount_1", content: text }],
+      ];
+      for (const [tool, args] of cases) {
+        const { result, logs } = await callToolCapturingLogs(tool, args);
+
+        expect(result.isError, `${tool}: ${text}`).toBe(true);
+        expect(resultText(result)).toContain("cannot be written back");
+        expect(logs).toBe("");
+      }
+    }
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it("rejects a restorable token in every other tool and field", async () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["compose-update", { composeId: "compose_1", description: PANEL_TOKEN }],
+      ["compose-update", { composeId: PANEL_TOKEN, composeFile: "services: {}\n" }],
+      ["compose-update", { composeId: "compose_1", composeFile: "a: b\n", name: PANEL_TOKEN }],
+      [
+        "compose-create",
+        { name: "demo", environmentId: "environment_1", composeFile: `A: ${PANEL_TOKEN}\n` },
+      ],
+      ["mounts-update", { mountId: "mount_1", filePath: PANEL_TOKEN }],
+      ["mounts-update", { mountId: "mount_1", content: "plain", hostPath: `/x/${PANEL_TOKEN}` }],
+      [
+        "mounts-create",
+        {
+          type: "file",
+          content: PANEL_TOKEN,
+          mountPath: "/app/config",
+          serviceType: "compose",
+          serviceId: "compose_1",
+        },
+      ],
+      ["application-update", { applicationId: "app_1", description: PANEL_TOKEN }],
+      ["application-one", { applicationId: PANEL_TOKEN }],
+      [
+        "docker-writeContainerFile",
+        { containerId: "container1", path: "/a", content: PANEL_TOKEN },
+      ],
+      ["application-env-upsert", { applicationId: "app_1", variables: { A: PANEL_TOKEN } }],
+      ["env-apply", { scope: "application", id: "app_1", set: { API_TOKEN: PANEL_TOKEN } }],
+    ];
+
+    for (const [tool, args] of cases) {
+      const { result, logs } = await callToolCapturingLogs(tool, args);
+
+      expect(result.isError, tool).toBe(true);
+      expect(resultText(result)).toContain(`Invalid input for ${tool}`);
+      expect(resultText(result)).toContain("cannot be written back");
+      expect(logs).toBe("");
+    }
+    expect(apiClient.post).not.toHaveBeenCalled();
+    expect(apiClient.get).not.toHaveBeenCalled();
+  });
+
+  it("explains in the rejection where a token may be sent back", async () => {
+    const { result } = await callToolCapturingLogs("application-update", {
+      applicationId: "app_1",
+      description: PANEL_TOKEN,
+    });
+    const text = resultText(result);
+
+    expect(text).toContain("__DOKPLOY_REDACTED_SECRET__XXXXXXXXXXXX__ may be sent back unchanged");
+    expect(text).toContain("compose-update, field composeFile");
+    expect(text).toContain("mounts-update, field content");
+    expect(text).toContain("Never invent or alter a token");
+    expect(text).toContain("[REDACTED] and the bare __DOKPLOY_REDACTED_SECRET__");
+    expect(text).toContain("can never be written back");
+    expect(text).not.toContain(PANEL_TOKEN);
+  });
+
+  it("tells the client in the server instructions how hidden values work", async () => {
+    const client = await getSharedClient();
+    const instructions = client.getInstructions() ?? "";
+
+    expect(instructions).toContain("Secret values are hidden");
+    expect(instructions).toContain("env-keys");
+    expect(instructions).toContain("env-apply");
+    expect(instructions).toContain("__DOKPLOY_REDACTED_SECRET__XXXXXXXXXXXX__");
+    expect(instructions).toContain("compose-update or mounts-update");
+  });
+
+  it("lists the blind env tools with their schemas and annotations", async () => {
+    const tools = await getToolList();
+    const keys = tools.find(({ name }) => name === "env-keys");
+    const apply = tools.find(({ name }) => name === "env-apply");
+
+    expect(keys?.annotations).toMatchObject({ readOnlyHint: true, idempotentHint: true });
+    expect(apply?.annotations).toMatchObject({ destructiveHint: true });
+    expect(apply?.annotations).not.toHaveProperty("readOnlyHint");
+
+    const keysSchema = keys?.inputSchema as Record<string, unknown>;
+    const keysProperties = keysSchema.properties as Record<string, Record<string, unknown>>;
+    expect(keysSchema.required).toEqual(["scope", "id"]);
+    expect(keysProperties.scope.enum).toEqual([
+      "application",
+      "compose",
+      "postgres",
+      "mysql",
+      "mariadb",
+      "mongo",
+      "redis",
+      "libsql",
+      "project",
+      "environment",
+    ]);
+    expect(keysProperties.field.enum).toEqual(["env", "buildArgs", "buildSecrets"]);
+
+    const applySchema = apply?.inputSchema as Record<string, unknown>;
+    const applyProperties = applySchema.properties as Record<string, Record<string, unknown>>;
+    expect(applySchema.required).toEqual(["scope", "id"]);
+    for (const operation of ["set", "generate", "copy"]) {
+      expect(applyProperties[operation].propertyNames).toMatchObject({
+        pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
+      });
+    }
+    expect(applyProperties.remove).toMatchObject({
+      type: "array",
+      items: { type: "string", pattern: "^[A-Za-z_][A-Za-z0-9_]*$" },
+    });
+    const generateOptions = applyProperties.generate.additionalProperties as Record<
+      string,
+      unknown
+    >;
+    expect(generateOptions.properties).toMatchObject({
+      length: { type: "integer", minimum: 16, maximum: 128 },
+      format: { enum: ["base64url", "hex", "alphanumeric"] },
+    });
+
+    for (const phrase of [
+      "never returned",
+      "env-keys",
+      "'generate'",
+      "'copy'",
+      "do not ask the user to paste it into the chat",
+      "Dokploy panel UI",
+      "application-redeploy",
+      "compose-redeploy",
+      "postgres-deploy",
+    ]) {
+      expect(apply?.description).toContain(phrase);
+    }
+    expect(keys?.description).toContain("Values are never returned");
+  });
+
+  it("names only deploy tools that exist in the env-apply description", async () => {
+    const names = new Set((await getToolList()).map(({ name }) => name));
+    const { envApplyTool } = await import("./envTools.js");
+    const mentioned = envApplyTool.description.match(/\b[a-z]+-(?:re)?deploy\b/g) ?? [];
+
+    expect(mentioned.length).toBeGreaterThanOrEqual(10);
+    for (const name of mentioned) {
+      expect(names.has(name), name).toBe(true);
+    }
+  });
+
+  it("reads variable names through env-keys and returns only schema fields", async () => {
+    mocked(apiClient.get).mockResolvedValueOnce({
+      data: {
+        scope: "application",
+        id: "app_1",
+        field: "env",
+        revision: "env:rev-1",
+        env: `API_TOKEN=${SECRET}`,
+        variables: [
+          { name: "API_TOKEN", secret: true, empty: false, value: SECRET },
+          { name: "PORT", secret: false, empty: true, preview: SECRET },
+        ],
+        debug: { raw: SECRET },
+      },
+    });
+
+    const result = await callTool("env-keys", { scope: "application", id: "app_1" });
+
+    expect(apiClient.get).toHaveBeenCalledTimes(1);
+    expect(apiClient.get).toHaveBeenCalledWith("/env.keys", {
+      params: { scope: "application", id: "app_1" },
+    });
+    expect(apiClient.post).not.toHaveBeenCalled();
+    expect(resultText(result)).not.toContain(SECRET);
+    expect(resultData(result)).toEqual({
+      scope: "application",
+      id: "app_1",
+      field: "env",
+      revision: "env:rev-1",
+      variables: [
+        { name: "API_TOKEN", secret: true, empty: false },
+        { name: "PORT", secret: false, empty: true },
+      ],
+    });
+  });
+
+  it("passes the field of env-keys and checks it against the scope", async () => {
+    mocked(apiClient.get).mockResolvedValueOnce({
+      data: {
+        scope: "application",
+        id: "app_1",
+        field: "buildSecrets",
+        revision: "env:rev-2",
+        variables: [],
+      },
+    });
+    const result = await callTool("env-keys", {
+      scope: "application",
+      id: "app_1",
+      field: "buildSecrets",
+    });
+    expect(apiClient.get).toHaveBeenCalledWith("/env.keys", {
+      params: { scope: "application", id: "app_1", field: "buildSecrets" },
+    });
+    expect(resultData(result).field).toBe("buildSecrets");
+
+    mock.clearAllMocks();
+    const rejected = await callTool("env-keys", {
+      scope: "compose",
+      id: "compose_1",
+      field: "buildArgs",
+    });
+    expect(rejected.isError).toBe(true);
+    expect(resultText(rejected)).toContain("exist only for scope 'application'");
+    expect(apiClient.get).not.toHaveBeenCalled();
+  });
+
+  it("fails env-keys on a response for another target or with a wrong shape", async () => {
+    const valid = {
+      scope: "application",
+      id: "app_1",
+      field: "env",
+      revision: "env:rev-1",
+      variables: [{ name: "API_TOKEN", secret: true, empty: false }],
+    };
+    const responses = [
+      { ...valid, id: "app_other" },
+      { ...valid, scope: "compose" },
+      { ...valid, field: "buildArgs" },
+      { ...valid, variables: [{ name: "API_TOKEN", secret: "yes", empty: false }] },
+      { scope: "application", id: "app_1", env: `API_TOKEN=${SECRET}` },
+      `API_TOKEN=${SECRET}`,
+    ];
+
+    for (const data of responses) {
+      mock.clearAllMocks();
+      mocked(apiClient.get).mockResolvedValueOnce({ data });
+      const result = await callTool("env-keys", { scope: "application", id: "app_1" });
+      const text = resultText(result);
+
+      expect(result.isError).toBe(true);
+      expect(text).toContain("Failed to execute env-keys");
+      expect(text).not.toContain(SECRET);
+      expect(text).not.toContain("app_other");
+    }
+  });
+
+  it("applies env changes through env-apply without returning or logging values", async () => {
+    const input = {
+      scope: "compose",
+      id: "compose_1",
+      set: { PUBLIC_URL: `https://app.example.test/${SECRET}`, PORT: "3000" },
+      remove: ["OLD_FLAG"],
+      generate: { SESSION_SECRET: { length: 64, format: "hex" }, API_KEY: {} },
+      copy: {
+        DB_PASSWORD: { fromScope: "postgres", fromId: "postgres_1", fromName: "POSTGRES_PASSWORD" },
+      },
+      dryRun: false,
+      expectedRevision: "env:rev-1",
+    };
+    mocked(apiClient.post).mockResolvedValueOnce({
+      data: {
+        scope: "compose",
+        id: "compose_1",
+        field: "env",
+        changed: true,
+        revision: "env:rev-2",
+        dryRun: false,
+        env: `SESSION_SECRET=${SECRET}`,
+        variables: [
+          { name: "PUBLIC_URL", action: "updated", source: "set", secret: false, value: SECRET },
+          { name: "PORT", action: "unchanged", source: "set", secret: false },
+          { name: "OLD_FLAG", action: "missing", source: "remove", secret: false },
+          {
+            name: "SESSION_SECRET",
+            action: "created",
+            source: "generate",
+            secret: true,
+            generated: SECRET,
+          },
+          { name: "API_KEY", action: "created", source: "generate", secret: true },
+          { name: "DB_PASSWORD", action: "created", source: "copy", secret: true },
+        ],
+      },
+    });
+
+    const { result, logs } = await callToolCapturingLogs("env-apply", input);
+
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+    expect(apiClient.post).toHaveBeenCalledWith("/env.apply", input);
+    expect(apiClient.get).not.toHaveBeenCalled();
+    expect(resultText(result)).not.toContain(SECRET);
+    expect(resultData(result)).toEqual({
+      scope: "compose",
+      id: "compose_1",
+      field: "env",
+      changed: true,
+      revision: "env:rev-2",
+      dryRun: false,
+      variables: [
+        { name: "PUBLIC_URL", action: "updated", source: "set", secret: false },
+        { name: "PORT", action: "unchanged", source: "set", secret: false },
+        { name: "OLD_FLAG", action: "missing", source: "remove", secret: false },
+        { name: "SESSION_SECRET", action: "created", source: "generate", secret: true },
+        { name: "API_KEY", action: "created", source: "generate", secret: true },
+        { name: "DB_PASSWORD", action: "created", source: "copy", secret: true },
+      ],
+    });
+    expect(logs).toContain('"set":{"PUBLIC_URL":"[REDACTED]","PORT":"[REDACTED]"}');
+    expect(logs).toContain('"remove":["OLD_FLAG"]');
+    expect(logs).not.toContain(SECRET);
+    expect(logs).not.toContain("3000");
+  });
+
+  it("validates env-apply input before any request or log", async () => {
+    const target = { scope: "application", id: "app_1" };
+    const source = { fromScope: "postgres", fromId: "postgres_1", fromName: "POSTGRES_PASSWORD" };
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ ...target }, "Provide at least one variable"],
+      [{ ...target, set: {}, remove: [], generate: {}, copy: {} }, "Provide at least one variable"],
+      [{ ...target, dryRun: true }, "Provide at least one variable"],
+      [{ ...target, set: { A: SECRET }, remove: ["A"] }, "Repeated: A."],
+      [
+        { ...target, set: { A: SECRET }, generate: { A: {}, B: {} }, copy: { B: source } },
+        "Repeated: A, B.",
+      ],
+      [{ ...target, remove: ["A"], copy: { A: source } }, "Repeated: A."],
+      [
+        { scope: "postgres", id: "postgres_1", field: "buildArgs", set: { A: SECRET } },
+        "exist only for scope 'application'",
+      ],
+      [
+        { ...target, copy: { A: { ...source, fromField: "buildSecrets" } } },
+        "exist only for fromScope 'application'",
+      ],
+    ];
+
+    for (const [args, expected] of cases) {
+      const { result, logs } = await callToolCapturingLogs("env-apply", args);
+      const text = resultText(result);
+
+      expect(result.isError).toBe(true);
+      expect(text).toContain("Invalid input for env-apply");
+      expect(text).toContain(expected);
+      expect(text).not.toContain(SECRET);
+      expect(logs).toBe("");
+    }
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it("accepts a name repeated inside remove and field values for applications", async () => {
+    mocked(apiClient.post).mockResolvedValueOnce({
+      data: {
+        scope: "application",
+        id: "app_1",
+        field: "buildArgs",
+        changed: true,
+        revision: "env:rev-3",
+        dryRun: true,
+        variables: [{ name: "A", action: "removed", source: "remove", secret: false }],
+      },
+    });
+
+    const result = await callTool("env-apply", {
+      scope: "application",
+      id: "app_1",
+      field: "buildArgs",
+      remove: ["A", "A"],
+      dryRun: true,
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(apiClient.post).toHaveBeenCalledWith("/env.apply", {
+      scope: "application",
+      id: "app_1",
+      field: "buildArgs",
+      remove: ["A", "A"],
+      dryRun: true,
+    });
+  });
+
+  it("rejects env-apply values that contain a redaction placeholder", async () => {
+    for (const value of FORBIDDEN_PLACEHOLDER_FIXTURES()) {
+      const { result, logs } = await callToolCapturingLogs("env-apply", {
+        scope: "application",
+        id: "app_1",
+        set: { API_TOKEN: value },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(resultText(result)).toContain("cannot be written back");
+      expect(resultText(result)).not.toContain(value);
+      expect(logs).toBe("");
+    }
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid variable names and generate options in the env-apply schema", async () => {
+    const { envApplyTool } = await import("./envTools.js");
+    const target = { scope: "application", id: "app_1" };
+    const source = { fromScope: "postgres", fromId: "postgres_1", fromName: "POSTGRES_PASSWORD" };
+
+    for (const invalid of [
+      { ...target, set: { "1_BAD": "v" } },
+      { ...target, set: { "WITH-DASH": "v" } },
+      { ...target, set: { A: 1 } },
+      { ...target, remove: ["bad name"] },
+      { ...target, generate: { A: { length: 15 } } },
+      { ...target, generate: { A: { length: 129 } } },
+      { ...target, generate: { A: { length: 32.5 } } },
+      { ...target, generate: { A: { format: "base64" } } },
+      { ...target, copy: { A: { ...source, fromName: "bad-name" } } },
+      { ...target, copy: { A: { fromScope: "postgres", fromName: "X" } } },
+      { ...target, copy: { A: { ...source, fromScope: "server" } } },
+      { scope: "server", id: "server_1", set: { A: "v" } },
+      { scope: "application", id: "", set: { A: "v" } },
+      { ...target, field: "previewEnv", set: { A: "v" } },
+    ]) {
+      expect(envApplyTool.schema.safeParse(invalid).success, JSON.stringify(invalid)).toBe(false);
+    }
+
+    expect(
+      envApplyTool.schema.safeParse({
+        ...target,
+        set: { _A1: "v" },
+        generate: { B: { length: 16, format: "alphanumeric" }, C: { length: 128 }, D: {} },
+        copy: { E: { ...source, fromField: "env" } },
+      }).success,
+    ).toBe(true);
+
+    const result = await callTool("env-apply", { ...target, set: { "1_BAD": SECRET } });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).not.toContain(SECRET);
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it("sends env-apply once and answers failures with fixed messages only", async () => {
+    const args = { scope: "application", id: "app_1", generate: { SESSION_SECRET: {} } };
+    const cases: Array<[number, string]> = [
+      [409, "Call env-keys to get the current revision"],
+      [404, "a Dokploy version without the blind env API also answers this way"],
+      [400, "The Dokploy API request failed with status 400"],
+      [403, "The Dokploy API request failed with status 403"],
+      [503, "The Dokploy API request failed with status 503"],
+    ];
+
+    for (const [status, expected] of cases) {
+      mock.clearAllMocks();
+      mocked(apiClient.post).mockRejectedValueOnce({
+        isAxiosError: true,
+        response: { status, data: { message: `remote-body ${SECRET}`, env: `A=${SECRET}` } },
+      });
+      const { result, logs } = await callToolCapturingLogs("env-apply", args);
+      const text = resultText(result);
+
+      expect(apiClient.post).toHaveBeenCalledTimes(1);
+      expect(result.isError).toBe(true);
+      expect(text).toContain(expected);
+      expect(text).not.toContain("remote-body");
+      expect(text).not.toContain(SECRET);
+      expect(logs).not.toContain("remote-body");
+      expect(logs).not.toContain(SECRET);
+    }
+  });
+
+  it("fails env-apply on a response for another target", async () => {
+    mocked(apiClient.post).mockResolvedValueOnce({
+      data: {
+        scope: "application",
+        id: "app_other",
+        field: "env",
+        changed: true,
+        revision: "env:rev-2",
+        dryRun: false,
+        variables: [],
+      },
+    });
+
+    const result = await callTool("env-apply", {
+      scope: "application",
+      id: "app_1",
+      remove: ["OLD_FLAG"],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain("Failed to execute env-apply");
+    expect(resultText(result)).not.toContain("app_other");
+  });
+
+  it("never surfaces a remote error body, for any status", async () => {
+    for (const status of [400, 401, 404, 409, 422, 500, 502]) {
+      mock.clearAllMocks();
+      mocked(apiClient.get).mockRejectedValueOnce({
+        isAxiosError: true,
+        message: `Request failed: remote-message ${SECRET}`,
+        response: {
+          status,
+          data: { message: `remote-body env API_TOKEN=${SECRET}`, stack: `at ${SECRET}` },
+        },
+      });
+      const { result, logs } = await callToolCapturingLogs("application-one", {
+        applicationId: "app_1",
+      });
+      const text = resultText(result);
+
+      expect(result.isError).toBe(true);
+      expect(text).not.toContain("remote-body");
+      expect(text).not.toContain("remote-message");
+      expect(text).not.toContain(SECRET);
+      expect(logs).not.toContain("remote-body");
+      expect(logs).not.toContain(SECRET);
+    }
+  });
+
+  it("says precisely which actions the super password keeps away from API keys", async () => {
+    const tools = await getToolList();
+    const description =
+      tools.find(({ name }) => name === "superPassword-status")?.description ?? "";
+
+    expect(description).toContain(
+      "Never available through an API key, only in the panel in a browser:",
+    );
+    expect(description).toContain(
+      "deleting a whole service, database, project, environment, server",
+    );
+    expect(description).toContain(
+      "Allowed through the API key while access is open: every other write",
+    );
+    expect(description).toContain("deleting a schedule, domain, mount, port, redirect");
+    expect(description).toContain("removing single env variables with env-apply");
+    expect(description).not.toContain("Dangerous actions");
+    expect(description).not.toMatch(/\(revealing env, deletions/);
+
+    mocked(apiClient.get).mockResolvedValueOnce({
+      data: { isSet: true, active: true, expiresAt: null, lockedUntil: null },
+    });
+    const data = resultData(await callTool("superPassword-status", {}));
+
+    expect(data).not.toHaveProperty("dangerousActions");
+    expect(data.browserOnlyActions).toStartWith(
+      "never through an API key, only in the panel in a browser with access open: revealing secret values (env, API keys, container or volume file contents, docker inspect), terminals, deleting a whole service,",
+    );
+    expect(data.browserOnlyActions).toEndWith("and managing users, API keys and SSO");
+    expect(data.apiKeyAllowedWrites).toStartWith(
+      "through the API key while access is open: every other write, including deleting a schedule, domain, mount, port, redirect, basic-auth entry, backup configuration, volume backup, deployment record, tag, container or image,",
+    );
+    expect(data.apiKeyAllowedWrites).toEndWith("and removing single env variables with env-apply");
+  });
+
+  it("limits the browser-only denial to the action that was refused", async () => {
+    mocked(apiClient.post).mockRejectedValueOnce({
+      isAxiosError: true,
+      response: {
+        status: 403,
+        data: {
+          message:
+            "This action needs a browser session with super password access open. API keys cannot perform it.",
+        },
+      },
+    });
+
+    const text = resultText(
+      await callTool("compose-delete", { composeId: "compose_1", deleteVolumes: false }),
+    );
+
+    expect(text).toContain("can never perform it, even while access is open");
+    expect(text).toContain(
+      "This applies to this action only: other writes, including most deletions, work through the API key while access is open.",
+    );
   });
 });
 

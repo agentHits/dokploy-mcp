@@ -1,4 +1,10 @@
 import {
+  checkEnvToolInput,
+  findFullEnvField,
+  isBlindEnvTool,
+  parseEnvToolOutput,
+} from "./envTools.js";
+import {
   getSuperPasswordDenial,
   summarizeSuperPasswordStatus,
   superPasswordDenialResponse,
@@ -9,27 +15,46 @@ import { getClientConfig } from "./utils/clientConfig.js";
 import { createLogger } from "./utils/logger.js";
 import { redactSensitive } from "./utils/redactSensitive.js";
 import { type FormattedResponse, ResponseFormatter } from "./utils/responseFormatter.js";
+import {
+  PANEL_REDACTED,
+  panelTokenAt,
+  REDACTED,
+  SECRET_PLACEHOLDERS,
+} from "./utils/scrubSecrets.js";
 
 const logger = createLogger("ToolHandler");
-const FORBIDDEN_SECRET_PLACEHOLDERS = ["__DOKPLOY_REDACTED_SECRET__", "[REDACTED]"];
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 502, 503, 504]);
 const FINAL_OPERATION_STATUSES = new Set(["running", "succeeded", "failed"]);
+// The panel returns these file bodies base64-encoded with no encoding marker.
+const BASE64_CONTENT_PATHS = new Set(["/docker.readContainerFile", "/dockerVolume.readVolumeFile"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function getRedactFieldsForTool(tool: ToolDefinition, input: Record<string, unknown>) {
-  if (tool.execution?.kind === "compose-env-upsert") {
-    return ["variables"];
+// Request fields whose values must not reach the server log. They apply to the
+// logged input only: in a tool result a compose file is scrubbed but stays
+// readable, and "variables" or "set" name safe metadata.
+const LOG_ONLY_REDACT_FIELDS = ["composeFile", "dockerCompose"];
+
+// The only inputs whose text the panel restores on save: a token left where it
+// was keeps the hidden value. Anywhere else a token would be stored literally.
+const TOKEN_WRITE_BACK_FIELDS = new Map([
+  ["compose-update", "composeFile"],
+  ["mounts-update", "content"],
+]);
+
+function getLoggedInputRedactFields(tool: ToolDefinition): string[] {
+  if (tool.execution?.kind === "compose-env-upsert" || tool.name === "application-env-upsert") {
+    return [...LOG_ONLY_REDACT_FIELDS, "variables"];
   }
   if (tool.execution?.kind === "compose-deploy-exact") {
-    return ["idempotencyKey"];
+    return [...LOG_ONLY_REDACT_FIELDS, "idempotencyKey"];
   }
-  if (tool.name === "application-env-upsert" && isRecord(input.variables)) {
-    return Object.keys(input.variables);
+  if (tool.execution?.kind === "env-apply") {
+    return [...LOG_ONLY_REDACT_FIELDS, "set"];
   }
-  return [];
+  return LOG_ONLY_REDACT_FIELDS;
 }
 
 function invalidInput(tool: ToolDefinition): FormattedResponse {
@@ -39,15 +64,54 @@ function invalidInput(tool: ToolDefinition): FormattedResponse {
   );
 }
 
-function containsForbiddenPlaceholder(input: Record<string, unknown>): boolean {
-  if (!isRecord(input.variables)) {
-    return false;
-  }
+function redactedTextWriteBack(tool: ToolDefinition): FormattedResponse {
+  return ResponseFormatter.error(
+    `Invalid input for ${tool.name}`,
+    "The input contains redacted text that cannot be written back. [REDACTED] and the bare __DOKPLOY_REDACTED_SECRET__ stand in for a secret this server never shows and can never be written back: leave the field out to keep the stored value. Tokens of the form __DOKPLOY_REDACTED_SECRET__XXXXXXXXXXXX__ may be sent back unchanged, each where it was, only in a compose file (compose-update, field composeFile) or a file mount (mounts-update, field content): the panel then keeps the hidden value. Never invent or alter a token. To change a secret in a compose file, replace the inline value with a variable reference and set that variable with env-apply.",
+  );
+}
 
-  return Object.values(input.variables).some(
-    (value) =>
-      typeof value === "string" &&
-      FORBIDDEN_SECRET_PLACEHOLDERS.some((placeholder) => value.includes(placeholder)),
+function fullEnvWriteBlocked(tool: ToolDefinition): FormattedResponse {
+  return ResponseFormatter.error(
+    `${tool.name} cannot write env fields`,
+    "The fields env, buildArgs, buildSecrets, previewEnv, previewBuildArgs and previewBuildSecrets replace a whole variable list that this server never shows, so this tool does not accept them, not even to clear them. Leave them out. Use env-keys to list variable names and env-apply to set, generate, copy or remove individual variables; preview deployment variables can only be edited in the Dokploy panel.",
+  );
+}
+
+function containsSecretPlaceholder(value: unknown): boolean {
+  if (typeof value === "string") {
+    return SECRET_PLACEHOLDERS.some((placeholder) => value.includes(placeholder));
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsSecretPlaceholder);
+  }
+  return isRecord(value) && Object.values(value).some(containsSecretPlaceholder);
+}
+
+function hasOnlyRestorableTokens(text: string): boolean {
+  if (text.includes(REDACTED)) return false;
+
+  let tokenEnd = 0;
+  for (
+    let index = text.indexOf(PANEL_REDACTED);
+    index !== -1;
+    index = text.indexOf(PANEL_REDACTED, index + 1)
+  ) {
+    const token = panelTokenAt(text, index);
+    // A placeholder that starts inside the previous token shares its closing
+    // "__", so one of the two is not what the panel issued.
+    if (token === undefined || index < tokenEnd) return false;
+    tokenEnd = index + token.length;
+  }
+  return true;
+}
+
+function containsForbiddenPlaceholder(tool: ToolDefinition, input: Record<string, unknown>) {
+  const restorableField = TOKEN_WRITE_BACK_FIELDS.get(tool.name);
+  return Object.entries(input).some(([field, value]) =>
+    field === restorableField && typeof value === "string"
+      ? !hasOnlyRestorableTokens(value)
+      : containsSecretPlaceholder(value),
   );
 }
 
@@ -236,6 +300,14 @@ async function executeTool(tool: ToolDefinition, input: Record<string, unknown>)
       const response = await apiClient.get(tool.path);
       return summarizeSuperPasswordStatus(response.data);
     }
+    case "env-keys": {
+      const response = await apiClient.get(tool.path, { params: input });
+      return parseEnvToolOutput(tool, input, response.data);
+    }
+    case "env-apply": {
+      const response = await apiClient.post(tool.path, input);
+      return parseEnvToolOutput(tool, input, response.data);
+    }
     default: {
       const response =
         tool.method === "GET"
@@ -246,43 +318,60 @@ async function executeTool(tool: ToolDefinition, input: Record<string, unknown>)
   }
 }
 
+function conflictDetails(tool: ToolDefinition): string {
+  if (tool.execution?.kind === "compose-env-upsert") {
+    return "The compose env revision is stale or changed concurrently. Call compose_env_upsert with dryRun=true and no expectedRevision to get the current revision, then retry with it.";
+  }
+  if (tool.execution?.kind === "env-apply") {
+    return "The env revision is stale or the variables changed concurrently. Call env-keys to get the current revision, then retry with it.";
+  }
+  return "The operation state changed; inspect or preview again before retrying";
+}
+
 export function createHandler(tool: ToolDefinition) {
   return async (rawInput: Record<string, unknown>) => {
+    if (containsForbiddenPlaceholder(tool, rawInput)) {
+      return redactedTextWriteBack(tool);
+    }
+
     let input = rawInput;
-    if (tool.execution) {
+    if (isBlindEnvTool(tool)) {
+      const checked = checkEnvToolInput(tool.execution.kind, rawInput);
+      if (!checked.ok) {
+        return ResponseFormatter.error(`Invalid input for ${tool.name}`, checked.problem);
+      }
+      input = checked.input;
+    } else if (findFullEnvField(rawInput) !== undefined) {
+      return fullEnvWriteBlocked(tool);
+    } else if (tool.execution) {
       const parsedInput = tool.schema.safeParse(rawInput);
       if (!parsedInput.success || !isRecord(parsedInput.data)) {
         return invalidInput(tool);
       }
       input = parsedInput.data;
 
-      if (tool.execution.kind === "compose-env-upsert") {
-        if (containsForbiddenPlaceholder(input)) {
-          return invalidInput(tool);
-        }
-        if (
-          input.dryRun !== true &&
-          (typeof input.expectedRevision !== "string" || input.expectedRevision.length === 0)
-        ) {
-          return invalidInput(tool);
-        }
+      if (
+        tool.execution.kind === "compose-env-upsert" &&
+        input.dryRun !== true &&
+        (typeof input.expectedRevision !== "string" || input.expectedRevision.length === 0)
+      ) {
+        return invalidInput(tool);
       }
     }
 
-    const { redactEnv, redactFields } = getClientConfig();
-    const toolRedactFields = getRedactFieldsForTool(tool, input);
-    const effectiveRedactFields = redactEnv
-      ? [...new Set([...redactFields, ...toolRedactFields])]
-      : toolRedactFields;
-    const redact = <T>(value: T): T =>
-      effectiveRedactFields.length > 0 ? redactSensitive(value, effectiveRedactFields) : value;
+    const { extraRedactFields } = getClientConfig();
+    const loggedInputFields = [...extraRedactFields, ...getLoggedInputRedactFields(tool)];
 
     try {
-      logger.info(`Executing tool: ${tool.name}`, { input: redact(input) });
+      logger.info(`Executing tool: ${tool.name}`, {
+        input: redactSensitive(input, loggedInputFields),
+      });
       const data = await executeTool(tool, input);
       return ResponseFormatter.success(
         `${tool.name} completed successfully`,
-        tool.execution ? data : redact(data),
+        redactSensitive(data, extraRedactFields, {
+          base64Content: BASE64_CONTENT_PATHS.has(tool.path),
+        }),
       );
     } catch (error) {
       const status = getHttpStatus(error);
@@ -303,15 +392,15 @@ export function createHandler(tool: ToolDefinition) {
       if (status === 404) {
         return ResponseFormatter.error(
           "Resource not found",
-          `The requested resource for ${tool.name} could not be found`,
+          isBlindEnvTool(tool)
+            ? `The requested resource for ${tool.name} could not be found. Check scope and id; a Dokploy version without the blind env API also answers this way.`
+            : `The requested resource for ${tool.name} could not be found`,
         );
       }
       if (status === 409) {
         return ResponseFormatter.error(
           `Conflict while executing ${tool.name}`,
-          tool.execution?.kind === "compose-env-upsert"
-            ? "The compose env revision is stale or changed concurrently. Call compose_env_upsert with dryRun=true and no expectedRevision to get the current revision, then retry with it."
-            : "The operation state changed; inspect or preview again before retrying",
+          conflictDetails(tool),
         );
       }
 

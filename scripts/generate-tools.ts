@@ -1,6 +1,10 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { type JsonSchema, jsonSchemaToZod } from "json-schema-to-zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
+import { envApplyTool, envKeysTool, FULL_ENV_FIELDS } from "../src/envTools.js";
+import { superPasswordStatusTool } from "../src/superPassword.js";
+import type { ToolDefinition } from "../src/types.js";
 
 interface OpenAPISpec {
   paths: Record<string, Record<string, OperationObject>>;
@@ -332,6 +336,33 @@ function extractParams(op: OperationObject, method: string): ToolMdEntry["params
   return params;
 }
 
+// The server never lists a tool that needs a whole env text (see
+// requiresFullEnvText in src/envTools.ts), so TOOLS.md leaves it out as well.
+function requiresFullEnvText(op: OperationObject): boolean {
+  const schema = op.requestBody?.content?.["application/json"]?.schema;
+  if (typeof schema !== "object" || schema === null) {
+    return false;
+  }
+  const required = (schema as JsonSchemaObject).required ?? [];
+  return FULL_ENV_FIELDS.some((field) => required.includes(field));
+}
+
+function handWrittenToolEntry(tool: ToolDefinition): ToolMdEntry {
+  const schema = zodToJsonSchema(tool.schema) as JsonSchemaObject;
+  const requiredSet = new Set(schema.required || []);
+  return {
+    operationId: tool.name,
+    method: tool.method,
+    tag: tool.tag,
+    description: tool.description,
+    params: Object.entries(schema.properties || {}).map(([name, propSchema]) => ({
+      name,
+      type: schemaTypeToString(propSchema),
+      required: requiredSet.has(name),
+    })),
+  };
+}
+
 function generateToolsMd(entries: ToolMdEntry[]): string {
   const grouped = new Map<string, ToolMdEntry[]>();
   for (const entry of entries) {
@@ -347,6 +378,8 @@ function generateToolsMd(entries: ToolMdEntry[]): string {
     "",
     `- **Total Tools**: ${entries.length}`,
     `- **Categories**: ${grouped.size}`,
+    "",
+    "Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv`) are not exposed. Variables are managed with `env-keys` and `env-apply`, which never return values.",
     "",
     "## Categories",
     "",
@@ -462,13 +495,15 @@ function main() {
     }
   }`);
 
-        mdEntries.push({
-          operationId: toolName,
-          method: method.toUpperCase(),
-          tag,
-          description,
-          params: extractParams(op, method),
-        });
+        if (!requiresFullEnvText(op)) {
+          mdEntries.push({
+            operationId: toolName,
+            method: method.toUpperCase(),
+            tag,
+            description,
+            params: extractParams(op, method),
+          });
+        }
       } catch (err) {
         errorCount++;
         console.error(`Error processing ${operationId}:`, (err as Error).message);
@@ -491,6 +526,10 @@ ${tools.join(",\n")},
 
   writeFileSync(OUTPUT_PATH, output);
   console.log(`Generated ${tools.length} tools (${errorCount} errors) -> ${OUTPUT_PATH}`);
+
+  for (const tool of [superPasswordStatusTool, envKeysTool, envApplyTool]) {
+    mdEntries.push(handWrittenToolEntry(tool));
+  }
 
   // Write TOOLS.md
   const md = generateToolsMd(mdEntries);
