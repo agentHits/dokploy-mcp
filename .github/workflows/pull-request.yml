@@ -41,3 +41,20 @@ jobs:
 
       - name: Build
         run: bun run build
+
+      # Tests run the sources; only the bundle shows startup bugs of build/index.js.
+      - name: Smoke test HTTP mode of the build
+        env:
+          DOKPLOY_URL: https://dokploy.example
+          DOKPLOY_API_KEY: ci-smoke-test
+        run: |
+          bun build/index.js --http > http-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true; cat http-server.log' EXIT
+          curl -fsS --retry 20 --retry-connrefused --retry-delay 1 http://localhost:3000/health
+          response=$(curl -fsS http://localhost:3000/mcp \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"0.0.0"}}}')
+          grep -q '"serverInfo"' <<< "$response"
+          kill -0 "$server_pid"

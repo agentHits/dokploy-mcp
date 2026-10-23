@@ -1,5 +1,3 @@
-#!/usr/bin/env bun
-
 import { randomUUID } from "node:crypto";
 import type { HttpBindings } from "@hono/node-server";
 import { serve } from "@hono/node-server";
@@ -27,6 +25,9 @@ function neverResolve(): Promise<never> {
   return new Promise(() => {});
 }
 
+// Only src/index.ts starts the server. `bun build` puts this module into
+// build/index.js, the file in process.argv[1], so a self-start check here
+// would run next to that call and the second listen would crash on the port.
 export async function main() {
   const app = new Hono<{ Bindings: HttpBindings }>();
 
@@ -194,15 +195,5 @@ export async function main() {
         health: `http://localhost:${PORT}/health`,
       },
     });
-  });
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error) => {
-    logger.error("Fatal error occurred", {
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-    });
-    process.exit(1);
   });
 }
