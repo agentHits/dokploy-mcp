@@ -1,5 +1,5 @@
 # ----- Build Stage -----
-FROM oven/bun:1.4.2 AS builder
+FROM oven/bun:1.4.4 AS builder
 WORKDIR /app
 
 # Copy package and configuration
@@ -12,7 +12,7 @@ COPY src ./src
 RUN bun install --frozen-lockfile && bun run build
 
 # ----- Production Stage -----
-FROM oven/bun:1.4.2-slim
+FROM oven/bun:1.4.4-slim
 WORKDIR /app
 
 # Copy bundled build (no runtime dependencies needed)
