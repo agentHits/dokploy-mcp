@@ -1,6 +1,8 @@
 import {
   checkEnvToolInput,
+  ENV_LAYOUT_PATH,
   findFullEnvField,
+  findLayoutProblem,
   isBlindEnvTool,
   parseEnvToolOutput,
 } from "./envTools.js";
@@ -288,6 +290,15 @@ async function executeDeploymentReconcile(
   return repaired;
 }
 
+class EnvInputProblem extends Error {}
+
+async function checkLayoutAgainstPanel(input: Record<string, unknown>) {
+  const { scope, id, field } = input;
+  const response = await apiClient.get(ENV_LAYOUT_PATH, { params: { scope, id, field } });
+  const problem = findLayoutProblem(input, response.data);
+  if (problem !== null) throw new EnvInputProblem(problem);
+}
+
 async function executeTool(tool: ToolDefinition, input: Record<string, unknown>) {
   switch (tool.execution?.kind) {
     case "compose-env-upsert":
@@ -301,10 +312,16 @@ async function executeTool(tool: ToolDefinition, input: Record<string, unknown>)
       return summarizeSuperPasswordStatus(response.data);
     }
     case "env-keys": {
-      const response = await apiClient.get(tool.path, { params: input });
+      const { layout, ...params } = input;
+      const response = await apiClient.get(layout === true ? ENV_LAYOUT_PATH : tool.path, {
+        params,
+      });
       return parseEnvToolOutput(tool, input, response.data);
     }
     case "env-apply": {
+      if (Array.isArray(input.layout)) {
+        await checkLayoutAgainstPanel(input);
+      }
       const response = await apiClient.post(tool.path, input);
       return parseEnvToolOutput(tool, input, response.data);
     }
@@ -374,6 +391,9 @@ export function createHandler(tool: ToolDefinition) {
         }),
       );
     } catch (error) {
+      if (error instanceof EnvInputProblem) {
+        return ResponseFormatter.error(`Invalid input for ${tool.name}`, error.message);
+      }
       const status = getHttpStatus(error);
       logger.error(`Tool execution failed: ${tool.name}`, {
         ...(status === undefined ? {} : { status }),
@@ -393,7 +413,7 @@ export function createHandler(tool: ToolDefinition) {
         return ResponseFormatter.error(
           "Resource not found",
           isBlindEnvTool(tool)
-            ? `The requested resource for ${tool.name} could not be found. Check scope and id; a Dokploy version without the blind env API also answers this way.`
+            ? `The requested resource for ${tool.name} could not be found. Check scope and id; a Dokploy version without the blind env API also answers this way, and for a layout one without GET /env.layout.`
             : `The requested resource for ${tool.name} could not be found`,
         );
       }
@@ -404,6 +424,12 @@ export function createHandler(tool: ToolDefinition) {
         );
       }
 
+      if (status === 400 && tool.execution?.kind === "env-apply" && Array.isArray(input.layout)) {
+        return ResponseFormatter.error(
+          `Failed to execute ${tool.name}`,
+          "The panel rejected the layout with status 400: in the new order dotenv would read a value differently, or the text cannot be rearranged safely. Nothing was changed. Ask the user to rearrange it in the Dokploy panel.",
+        );
+      }
       return ResponseFormatter.error(
         `Failed to execute ${tool.name}`,
         status === undefined

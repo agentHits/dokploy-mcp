@@ -346,8 +346,8 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 
 | Tool | Method | Parameters |
 |------|--------|------------|
-| `env-keys` | GET | `scope` ("application" | "compose" | "postgres" | "mysql" | "mariadb" | "mongo" | "redis" | "libsql" | "project" | "environment"), `id` (string), `field`? |
-| `env-apply` | POST | `scope` ("application" | "compose" | "postgres" | "mysql" | "mariadb" | "mongo" | "redis" | "libsql" | "project" | "environment"), `id` (string), +7 optional |
+| `env-keys` | GET | `scope` ("application" | "compose" | "postgres" | "mysql" | "mariadb" | "mongo" | "redis" | "libsql" | "project" | "environment"), `id` (string), `field`?, `layout`? |
+| `env-apply` | POST | `scope` ("application" | "compose" | "postgres" | "mysql" | "mariadb" | "mongo" | "redis" | "libsql" | "project" | "environment"), `id` (string), +8 optional |
 
 ## environment
 

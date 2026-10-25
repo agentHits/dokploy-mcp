@@ -16,7 +16,7 @@ const LARGE_TOOLSET_WARNING_THRESHOLD = 150;
 
 const SERVER_INSTRUCTIONS = [
   "Secret values are hidden in every result of this server: they show up as [REDACTED] or __DOKPLOY_REDACTED_SECRET__ and cannot be read here.",
-  "List variable names with env-keys and set, generate, copy or remove single variables with env-apply.",
+  "List variable names with env-keys and set, generate, copy or remove single variables with env-apply. To add comments or arrange variables into sections, read the layout with env-keys (layout=true) and send the edited list back with env-apply 'layout'; values stay untouched.",
   "In a compose file or a file mount a hidden value can appear as a token of the form __DOKPLOY_REDACTED_SECRET__XXXXXXXXXXXX__: send it back unchanged, where it was, with compose-update or mounts-update to keep the stored value, and never invent or alter a token.",
 ].join(" ");
 

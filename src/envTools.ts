@@ -26,6 +26,9 @@ const SCOPES = [
 const FIELDS = ["env", "buildArgs", "buildSecrets"] as const;
 const DEFAULT_FIELD = "env";
 
+/** Read with env-keys when layout=true, and before every env-apply layout. */
+export const ENV_LAYOUT_PATH = "/env.layout";
+
 const scopeSchema = z.enum(SCOPES);
 const fieldSchema = z.enum(FIELDS);
 const nameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
@@ -45,7 +48,54 @@ const targetShape = {
     ),
 };
 
-const envKeysSchema = z.object(targetShape);
+const envKeysSchema = z.object({
+  ...targetShape,
+  layout: z
+    .boolean()
+    .optional()
+    .describe(
+      "Also return 'layout': the file order of variables, comments, blank lines and hidden lines, which env-apply 'layout' rewrites.",
+    ),
+});
+
+// dotenv also reads names with dots and dashes, so a layout has to be able to
+// place them even though env-apply cannot create them.
+const layoutNameSchema = z.string().regex(/^[\w.-]+$/);
+const commentRefSchema = z.string().regex(/^c[1-9][0-9]*$/);
+const hiddenRefSchema = z.string().regex(/^h[1-9][0-9]*$/);
+const commentTextSchema = z
+  .string()
+  .max(500)
+  .regex(/^[^\n\r\u2028\u2029]*$/);
+
+const layoutInputItemSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("variable"), name: layoutNameSchema }),
+  z.object({
+    type: z.literal("comment"),
+    ref: commentRefSchema
+      .optional()
+      .describe("Ref of an existing comment. Leave it out to add a new comment line."),
+    text: commentTextSchema
+      .optional()
+      .describe(
+        "Comment text without the leading '# '. With a ref it replaces that comment; without one it adds a line.",
+      ),
+  }),
+  z.object({ type: z.literal("hidden"), ref: hiddenRefSchema }),
+  z.object({ type: z.literal("blank") }),
+]);
+
+const layoutItemSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("variable"), name: z.string() }),
+  z.object({ type: z.literal("comment"), ref: z.string(), text: z.string() }),
+  z.object({
+    type: z.literal("hidden"),
+    ref: z.string(),
+    kind: z.enum(["comment", "overridden", "unreadable"]),
+    variable: z.string().optional(),
+  }),
+  z.object({ type: z.literal("blank") }),
+]);
 
 const envApplySchema = z.object({
   ...targetShape,
@@ -88,6 +138,12 @@ const envApplySchema = z.object({
     .describe(
       "Variables to fill with the value of a variable that already exists elsewhere, as name -> source. The value is copied on the server and never returned.",
     ),
+  layout: z
+    .array(layoutInputItemSchema)
+    .optional()
+    .describe(
+      "The whole new order of the text, edited from the 'layout' of env-keys with layout=true: move items, add comments and blank lines. Values are not touched. Sent alone, with expectedRevision.",
+    ),
   dryRun: z.boolean().optional().describe("Preview the result without saving anything."),
   expectedRevision: z
     .string()
@@ -103,6 +159,7 @@ const envKeysOutputSchema = z.object({
   field: fieldSchema,
   revision: z.string(),
   variables: z.array(z.object({ name: z.string(), secret: z.boolean(), empty: z.boolean() })),
+  layout: z.array(layoutItemSchema).optional(),
 });
 
 const envApplyOutputSchema = z.object({
@@ -120,16 +177,19 @@ const envApplyOutputSchema = z.object({
       secret: z.boolean(),
     }),
   ),
+  layout: z.array(layoutItemSchema).optional(),
 });
 
 type EnvKeysInput = z.infer<typeof envKeysSchema>;
 type EnvApplyInput = z.infer<typeof envApplySchema>;
+type LayoutItem = z.infer<typeof layoutItemSchema>;
+type LayoutInputItem = z.infer<typeof layoutInputItemSchema>;
 type EnvToolKind = "env-keys" | "env-apply";
 
 export const envKeysTool: ToolDefinition = {
   name: "env-keys",
   description:
-    "List the env variable names of a Dokploy service, project or environment. Values are never returned: each variable has only its name, a 'secret' flag (the panel treats it as a credential) and an 'empty' flag. Use this instead of reading 'env' from other tools, where it is always redacted. 'field' selects 'env' (default) or, for applications only, 'buildArgs' or 'buildSecrets'. The returned 'revision' can be passed to env-apply as expectedRevision. To change variables use env-apply.",
+    "List the env variable names of a Dokploy service, project or environment. Values are never returned: each variable has only its name, a 'secret' flag (the panel treats it as a credential) and an 'empty' flag. Use this instead of reading 'env' from other tools, where it is always redacted. 'field' selects 'env' (default) or, for applications only, 'buildArgs' or 'buildSecrets'. The returned 'revision' can be passed to env-apply as expectedRevision. To change variables use env-apply. With layout=true the result also has 'layout', the text from top to bottom: {type:'variable', name}, {type:'comment', ref, text} (text without the leading '# '), {type:'blank'} and {type:'hidden', ref, kind} for a line whose text is withheld because it could hold a value: kind 'comment' (for example a commented-out assignment, named in 'variable'), 'overridden' (an earlier assignment of 'variable' that a later one overrides) or 'unreadable' (text dotenv cannot read). Inline comments after a value are part of the variable and are not shown.",
   tag: "env",
   method: "GET",
   path: "/env.keys",
@@ -147,7 +207,7 @@ export const envKeysTool: ToolDefinition = {
 export const envApplyTool: ToolDefinition = {
   name: "env-apply",
   description:
-    "Change env variables of a Dokploy service, project or environment without seeing any value. Values are write-only and are never returned; call env-keys to see which variables exist. Every variable not named in the call is kept as it is. Operations, each keyed by variable name, and a name may appear in only one of them: 'set' writes a value you already know (non-secret settings); 'generate' creates a new random secret on the server (use it for new passwords, tokens and keys); 'copy' reuses the value of a variable from another service, project or environment without revealing it (use it to share an existing secret); 'remove' deletes variables. When a real secret must come from the user (an external API key, a third-party password), do not ask the user to paste it into the chat: ask them to enter it in the Dokploy panel UI on the Environment tab of the service, then confirm with env-keys. 'dryRun' previews the result, and 'expectedRevision' (from env-keys) rejects the write if the variables changed meanwhile. Changes take effect only after a redeploy: application-redeploy or application-deploy, compose-redeploy or compose-deploy, or postgres-deploy, mysql-deploy, mariadb-deploy, mongo-deploy, redis-deploy, libsql-deploy; for scope 'project' or 'environment' redeploy the services that use the variable.",
+    "Change env variables of a Dokploy service, project or environment without seeing any value. Values are write-only and are never returned; call env-keys to see which variables exist. Every variable not named in the call is kept as it is. Operations, each keyed by variable name, and a name may appear in only one of them: 'set' writes a value you already know (non-secret settings); 'generate' creates a new random secret on the server (use it for new passwords, tokens and keys); 'copy' reuses the value of a variable from another service, project or environment without revealing it (use it to share an existing secret); 'remove' deletes variables. 'layout' adds comments and arranges the variables into sections without touching any value: call env-keys with layout=true, edit its 'layout' list and send the whole list back with that call's revision as expectedRevision, alone, without set, remove, generate or copy. Move 'variable' items; add {type:'comment', text} lines, for example a section header '=== Database ===' above its variables and a note right above a variable; change a comment by keeping its ref with a new text; drop a shown comment by leaving it out; add {type:'blank'} between sections. Every variable and every hidden line has to stay in the list exactly once (hidden lines can be moved but not dropped), and an 'overridden' hidden line has to stay above its variable. To add a new variable into a section, create it with 'set', 'generate' or 'copy' first, then rearrange. When a real secret must come from the user (an external API key, a third-party password), do not ask the user to paste it into the chat: ask them to enter it in the Dokploy panel UI on the Environment tab of the service, then confirm with env-keys. 'dryRun' previews the result, and 'expectedRevision' (from env-keys) rejects the write if the variables changed meanwhile. Changes take effect only after a redeploy: application-redeploy or application-deploy, compose-redeploy or compose-deploy, or postgres-deploy, mysql-deploy, mariadb-deploy, mongo-deploy, redis-deploy, libsql-deploy; for scope 'project' or 'environment' redeploy the services that use the variable.",
   tag: "env",
   method: "POST",
   path: "/env.apply",
@@ -189,7 +249,21 @@ const FIELD_NEEDS_APPLICATION =
 const COPY_FIELD_NEEDS_APPLICATION =
   "copy fromField 'buildArgs' and 'buildSecrets' exist only for fromScope 'application'.";
 const NO_OPERATION =
-  "Provide at least one variable in set, remove, generate or copy. To only look at the variables, call env-keys.";
+  "Provide at least one variable in set, remove, generate or copy, or a layout. To only look at the variables, call env-keys.";
+const LAYOUT_ALONE =
+  "Send layout alone: change variables with set, remove, generate or copy in one call, then call env-keys with layout=true and send the edited layout in the next call.";
+const LAYOUT_NEEDS_REVISION =
+  "A layout needs expectedRevision: pass the revision of the env-keys call (with layout=true) that the layout was edited from.";
+const COMMENT_NEEDS_TEXT_OR_REF = "Each comment item of a layout needs a text, a ref or both.";
+
+function findLayoutShapeProblem(input: EnvApplyInput, operations: string[][]): string | null {
+  if (operations.some((names) => names.length > 0)) return LAYOUT_ALONE;
+  if (!input.expectedRevision) return LAYOUT_NEEDS_REVISION;
+  const emptyComment = input.layout?.some(
+    (item) => item.type === "comment" && item.ref === undefined && item.text === undefined,
+  );
+  return emptyComment ? COMMENT_NEEDS_TEXT_OR_REF : null;
+}
 
 function isApplicationOnlyField(scope: string, field: string | undefined): boolean {
   return field !== undefined && field !== DEFAULT_FIELD && scope !== "application";
@@ -204,6 +278,7 @@ function findEnvApplyProblem(input: EnvApplyInput): string | null {
     Object.keys(input.generate ?? {}),
     Object.keys(input.copy ?? {}),
   ];
+  if (input.layout !== undefined) return findLayoutShapeProblem(input, operations);
   if (operations.every((names) => names.length === 0)) return NO_OPERATION;
 
   const seen = new Set<string>();
@@ -245,6 +320,86 @@ export function checkEnvToolInput(kind: EnvToolKind, rawInput: unknown): EnvInpu
   return problem === null ? { ok: true, input: parsed.data } : { ok: false, problem };
 }
 
+const listNames = (names: Iterable<string>) => [...names].join(", ");
+
+function compareLayouts(current: LayoutItem[], layout: LayoutInputItem[]): string | null {
+  const names = new Set<string>();
+  const commentRefs = new Set<string>();
+  const hidden = new Map<string, LayoutItem & { type: "hidden" }>();
+  for (const item of current) {
+    if (item.type === "variable") names.add(item.name);
+    else if (item.type === "comment") commentRefs.add(item.ref);
+    else if (item.type === "hidden") hidden.set(item.ref, item);
+  }
+
+  const namePositions = new Map<string, number>();
+  const refPositions = new Map<string, number>();
+  const unknownNames = new Set<string>();
+  const repeatedNames = new Set<string>();
+  const unknownRefs = new Set<string>();
+  const repeatedRefs = new Set<string>();
+  layout.forEach((item, index) => {
+    if (item.type === "variable") {
+      if (!names.has(item.name)) unknownNames.add(item.name);
+      else if (namePositions.has(item.name)) repeatedNames.add(item.name);
+      else namePositions.set(item.name, index);
+      return;
+    }
+    const ref = item.type === "comment" || item.type === "hidden" ? item.ref : undefined;
+    if (ref === undefined) return;
+    const known = item.type === "comment" ? commentRefs.has(ref) : hidden.has(ref);
+    if (!known) unknownRefs.add(ref);
+    else if (refPositions.has(ref)) repeatedRefs.add(ref);
+    else refPositions.set(ref, index);
+  });
+
+  const missingNames = [...names].filter((name) => !namePositions.has(name));
+  const missingHidden = [...hidden.keys()].filter((ref) => !refPositions.has(ref));
+  const misplaced = [...hidden.values()]
+    .filter(
+      (item) =>
+        item.kind === "overridden" &&
+        item.variable !== undefined &&
+        (refPositions.get(item.ref) ?? -1) >
+          (namePositions.get(item.variable) ?? Number.POSITIVE_INFINITY),
+    )
+    .map((item) => `${item.ref} (${item.variable})`);
+  const problems = [
+    unknownNames.size > 0 &&
+      `The layout names variables that do not exist: ${listNames(unknownNames)}.`,
+    repeatedNames.size > 0 &&
+      `The layout places variables more than once: ${listNames(repeatedNames)}.`,
+    missingNames.length > 0 &&
+      `The layout leaves out variables: ${listNames(missingNames)}. Every variable has to be placed; delete one with remove instead.`,
+    unknownRefs.size > 0 &&
+      `The layout refers to lines that do not exist: ${listNames(unknownRefs)}.`,
+    repeatedRefs.size > 0 && `The layout places lines more than once: ${listNames(repeatedRefs)}.`,
+    missingHidden.length > 0 &&
+      `The layout leaves out hidden lines: ${listNames(missingHidden)}. Their text is not shown, so they can be moved but not dropped.`,
+    misplaced.length > 0 &&
+      `These hidden lines are earlier assignments of a variable and have to stay above it: ${listNames(misplaced)}.`,
+  ].filter((problem): problem is string => typeof problem === "string");
+  return problems.length > 0 ? problems.join(" ") : null;
+}
+
+/**
+ * Checks the layout of an env-apply input against the current layout from
+ * GET /env.layout. The panel runs the same checks, but its error text is never
+ * passed on, so the model would only learn that the request failed. Problems
+ * name variables and refs, never a value.
+ */
+export function findLayoutProblem(
+  input: Record<string, unknown>,
+  currentData: unknown,
+): string | null {
+  const target = { scope: input.scope, id: input.id, field: input.field, layout: true };
+  const current = envKeysOutputSchema.parse(parseEnvToolOutput(envKeysTool, target, currentData));
+  // On a stale revision the panel answers 409, which tells the model to read
+  // the layout again; problems found against a newer text would only confuse.
+  if (current.revision !== input.expectedRevision) return null;
+  return compareLayouts(current.layout ?? [], input.layout as LayoutInputItem[]);
+}
+
 /**
  * Keeps only the fields of the output schema and checks that the panel answered
  * for the target that was asked about.
@@ -266,6 +421,10 @@ export function parseEnvToolOutput(
     output.field !== (input.field ?? DEFAULT_FIELD)
   ) {
     throw new Error("invalid env response identity");
+  }
+  const layoutRequested = input.layout === true || Array.isArray(input.layout);
+  if (layoutRequested && output.layout === undefined) {
+    throw new Error("invalid env layout response");
   }
   return output;
 }

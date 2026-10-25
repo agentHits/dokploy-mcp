@@ -1948,6 +1948,274 @@ describe("MCP server tools/list", () => {
     expect(apiClient.post).not.toHaveBeenCalled();
   });
 
+  const PANEL_LAYOUT = [
+    { type: "comment", ref: "c1", text: "App settings" },
+    { type: "hidden", ref: "h1", kind: "overridden", variable: "SERVICE_URL" },
+    { type: "variable", name: "SERVICE_TOKEN" },
+    { type: "hidden", ref: "h2", kind: "comment", variable: "OLD_TOKEN" },
+    { type: "blank" },
+    { type: "variable", name: "SERVICE_URL" },
+  ];
+  const layoutResponse = (revision = "env:rev-1", layout: unknown = PANEL_LAYOUT) => ({
+    data: {
+      scope: "application",
+      id: "app_1",
+      field: "env",
+      revision,
+      variables: [
+        { name: "SERVICE_TOKEN", secret: true, empty: false },
+        { name: "SERVICE_URL", secret: false, empty: false },
+      ],
+      layout,
+    },
+  });
+  const sectioned = [
+    { type: "comment", text: "=== Web ===" },
+    { type: "hidden", ref: "h1" },
+    { type: "variable", name: "SERVICE_URL" },
+    { type: "blank" },
+    { type: "comment", text: "=== Auth ===" },
+    { type: "comment", ref: "c1", text: "Signs sessions" },
+    { type: "variable", name: "SERVICE_TOKEN" },
+    { type: "hidden", ref: "h2" },
+  ];
+
+  it("describes layout reading and rewriting in the env tool schemas", async () => {
+    const tools = await getToolList();
+    const keys = tools.find(({ name }) => name === "env-keys");
+    const apply = tools.find(({ name }) => name === "env-apply");
+    const keysProperties = (keys?.inputSchema as Record<string, unknown>).properties as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const applyProperties = (apply?.inputSchema as Record<string, unknown>).properties as Record<
+      string,
+      Record<string, unknown>
+    >;
+
+    expect(keysProperties.layout).toMatchObject({ type: "boolean" });
+    expect(applyProperties.layout).toMatchObject({ type: "array" });
+    const itemTypes = JSON.stringify(applyProperties.layout.items);
+    for (const type of ["variable", "comment", "hidden", "blank"]) {
+      expect(itemTypes).toContain(`"${type}"`);
+    }
+    for (const phrase of ["layout=true", "'overridden'", "'unreadable'"]) {
+      expect(keys?.description).toContain(phrase);
+    }
+    for (const phrase of [
+      "'layout' adds comments and arranges the variables into sections",
+      "=== Database ===",
+      "hidden lines can be moved but not dropped",
+      "expectedRevision",
+    ]) {
+      expect(apply?.description).toContain(phrase);
+    }
+  });
+
+  it("reads the layout through GET /env.layout and keeps only schema fields", async () => {
+    mocked(apiClient.get).mockResolvedValueOnce(
+      layoutResponse("env:rev-1", [
+        { type: "comment", ref: "c1", text: `API_TOKEN=${SECRET}`, line: `# ${SECRET}` },
+        { type: "hidden", ref: "h1", kind: "comment", value: SECRET },
+        { type: "variable", name: "SERVICE_TOKEN", value: SECRET },
+      ]),
+    );
+
+    const result = await callTool("env-keys", { scope: "application", id: "app_1", layout: true });
+
+    expect(apiClient.get).toHaveBeenCalledTimes(1);
+    expect(apiClient.get).toHaveBeenCalledWith("/env.layout", {
+      params: { scope: "application", id: "app_1" },
+    });
+    expect(resultText(result)).not.toContain(SECRET);
+    expect(resultData(result).layout).toEqual([
+      { type: "comment", ref: "c1", text: "API_TOKEN=[REDACTED]" },
+      { type: "hidden", ref: "h1", kind: "comment" },
+      { type: "variable", name: "SERVICE_TOKEN" },
+    ]);
+  });
+
+  it("fails env-keys with layout=true when the panel returns no layout", async () => {
+    const { layout: _layout, ...withoutLayout } = layoutResponse().data;
+    mocked(apiClient.get).mockResolvedValueOnce({ data: withoutLayout });
+
+    const result = await callTool("env-keys", { scope: "application", id: "app_1", layout: true });
+
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain("Failed to execute env-keys");
+  });
+
+  it("checks a layout against the panel layout and then applies it", async () => {
+    const input = {
+      scope: "application",
+      id: "app_1",
+      layout: sectioned,
+      expectedRevision: "env:rev-1",
+    };
+    mocked(apiClient.get).mockResolvedValueOnce(layoutResponse());
+    mocked(apiClient.post).mockResolvedValueOnce({
+      data: {
+        scope: "application",
+        id: "app_1",
+        field: "env",
+        changed: true,
+        revision: "env:rev-2",
+        dryRun: false,
+        variables: [],
+        layout: [
+          { type: "comment", ref: "c1", text: "=== Web ===" },
+          { type: "variable", name: "SERVICE_URL", value: SECRET },
+        ],
+        env: `SERVICE_TOKEN=${SECRET}`,
+      },
+    });
+
+    const result = await callTool("env-apply", input);
+
+    expect(apiClient.get).toHaveBeenCalledTimes(1);
+    expect(apiClient.get).toHaveBeenCalledWith("/env.layout", {
+      params: { scope: "application", id: "app_1" },
+    });
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+    expect(apiClient.post).toHaveBeenCalledWith("/env.apply", input);
+    expect(resultText(result)).not.toContain(SECRET);
+    expect(resultData(result)).toEqual({
+      scope: "application",
+      id: "app_1",
+      field: "env",
+      changed: true,
+      revision: "env:rev-2",
+      dryRun: false,
+      variables: [],
+      layout: [
+        { type: "comment", ref: "c1", text: "=== Web ===" },
+        { type: "variable", name: "SERVICE_URL" },
+      ],
+    });
+  });
+
+  it("names layout problems from the panel layout without sending the change", async () => {
+    mocked(apiClient.get).mockResolvedValueOnce(layoutResponse());
+
+    const result = await callTool("env-apply", {
+      scope: "application",
+      id: "app_1",
+      field: "env",
+      layout: [
+        { type: "variable", name: "SERVICE_URL" },
+        { type: "hidden", ref: "h1" },
+        { type: "variable", name: "UNKNOWN_NAME" },
+        { type: "comment", ref: "c1" },
+        { type: "comment", ref: "c1" },
+        { type: "hidden", ref: "h9" },
+      ],
+      expectedRevision: "env:rev-1",
+    });
+    const text = resultText(result);
+
+    expect(result.isError).toBe(true);
+    expect(apiClient.get).toHaveBeenCalledTimes(1);
+    expect(apiClient.get).toHaveBeenCalledWith("/env.layout", {
+      params: { scope: "application", id: "app_1", field: "env" },
+    });
+    expect(apiClient.post).not.toHaveBeenCalled();
+    for (const problem of [
+      "Invalid input for env-apply",
+      "The layout names variables that do not exist: UNKNOWN_NAME.",
+      "The layout leaves out variables: SERVICE_TOKEN.",
+      "The layout refers to lines that do not exist: h9.",
+      "The layout places lines more than once: c1.",
+      "The layout leaves out hidden lines: h2.",
+      "have to stay above it: h1 (SERVICE_URL).",
+    ]) {
+      expect(text).toContain(problem);
+    }
+  });
+
+  it("leaves a layout of another revision to the panel's conflict answer", async () => {
+    mocked(apiClient.get).mockResolvedValueOnce(layoutResponse("env:rev-9", []));
+    mocked(apiClient.post).mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status: 409, data: { message: "conflict" } },
+    });
+
+    const result = await callTool("env-apply", {
+      scope: "application",
+      id: "app_1",
+      layout: sectioned,
+      expectedRevision: "env:rev-1",
+    });
+
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+    expect(resultText(result)).toContain("Call env-keys to get the current revision");
+  });
+
+  it("explains a layout the panel rejects without passing its text on", async () => {
+    mocked(apiClient.get).mockResolvedValueOnce(layoutResponse());
+    mocked(apiClient.post).mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status: 400, data: { message: `remote-body ${SECRET}` } },
+    });
+
+    const result = await callTool("env-apply", {
+      scope: "application",
+      id: "app_1",
+      layout: sectioned,
+      expectedRevision: "env:rev-1",
+    });
+    const text = resultText(result);
+
+    expect(text).toContain("The panel rejected the layout with status 400");
+    expect(text).toContain("Nothing was changed");
+    expect(text).not.toContain("remote-body");
+    expect(text).not.toContain(SECRET);
+  });
+
+  it("rejects a malformed layout before any request", async () => {
+    const target = { scope: "application", id: "app_1" };
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [
+        { ...target, layout: sectioned, set: { NEW_NAME: "1" }, expectedRevision: "env:rev-1" },
+        "Send layout alone",
+      ],
+      [{ ...target, layout: sectioned }, "A layout needs expectedRevision"],
+      [
+        { ...target, layout: [{ type: "comment" }], expectedRevision: "env:rev-1" },
+        "needs a text, a ref or both",
+      ],
+      [
+        {
+          ...target,
+          layout: [{ type: "comment", text: "two\nlines" }],
+          expectedRevision: "env:rev-1",
+        },
+        "Invalid arguments for tool env-apply",
+      ],
+      [
+        { ...target, layout: [{ type: "hidden", ref: "c1" }], expectedRevision: "env:rev-1" },
+        "Invalid arguments for tool env-apply",
+      ],
+      [
+        {
+          ...target,
+          layout: [{ type: "comment", text: "old [REDACTED]" }],
+          expectedRevision: "env:rev-1",
+        },
+        "redacted text that cannot be written back",
+      ],
+    ];
+
+    for (const [args, expected] of cases) {
+      mock.clearAllMocks();
+      const result = await callTool("env-apply", args);
+
+      expect(result.isError).toBe(true);
+      expect(resultText(result)).toContain(expected);
+      expect(apiClient.get).not.toHaveBeenCalled();
+      expect(apiClient.post).not.toHaveBeenCalled();
+    }
+  });
+
   it("sends env-apply once and answers failures with fixed messages only", async () => {
     const args = { scope: "application", id: "app_1", generate: { SESSION_SECRET: {} } };
     const cases: Array<[number, string]> = [
