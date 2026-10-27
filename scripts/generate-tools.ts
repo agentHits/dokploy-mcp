@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { type JsonSchema, jsonSchemaToZod } from "json-schema-to-zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { z } from "zod";
 import { envApplyTool, envKeysTool, FULL_ENV_FIELDS } from "../src/envTools.js";
 import { superPasswordStatusTool } from "../src/superPassword.js";
 import type { ToolDefinition } from "../src/types.js";
@@ -135,7 +135,28 @@ function getProjectingResponseSchema(op: OperationObject): string | undefined {
     );
   };
 
-  return jsonSchemaToZod(removeAdditionalProperties(schema) as JsonSchema, { zodVersion: 3 });
+  return jsonSchemaToZod(removeAdditionalProperties(schema) as JsonSchema, { zodVersion: 4 });
+}
+
+// Zod checks .max() before it parses the elements, so an oversized input
+// array is rejected with one issue instead of one per element
+// (GHSA-mrhx-c7xc-m3w5). Response schemas keep their arrays unbounded.
+const MAX_INPUT_ARRAY_ITEMS = 1000;
+
+function capInputArrays<T>(schema: T): T {
+  if (Array.isArray(schema)) {
+    return schema.map(capInputArrays) as T;
+  }
+  if (typeof schema !== "object" || schema === null) {
+    return schema;
+  }
+  const record: Record<string, unknown> = Object.fromEntries(
+    Object.entries(schema).map(([key, value]) => [key, capInputArrays(value)]),
+  );
+  if (record.type === "array" && record.maxItems === undefined) {
+    record.maxItems = MAX_INPUT_ARRAY_ITEMS;
+  }
+  return record as T;
 }
 
 function formatTitle(operationId: string): string {
@@ -148,7 +169,7 @@ function formatTitle(operationId: string): string {
 
 function getZodSchema(op: OperationObject, method: string, path: string): string {
   if (method === "post" && op.requestBody?.content?.["application/json"]?.schema) {
-    const sourceSchema = op.requestBody.content["application/json"].schema;
+    const sourceSchema = capInputArrays(op.requestBody.content["application/json"].schema);
     const schema =
       path === "/compose/env/upsert" &&
       typeof sourceSchema === "object" &&
@@ -166,7 +187,7 @@ function getZodSchema(op: OperationObject, method: string, path: string): string
             },
           }
         : sourceSchema;
-    return customZodObjectSchema(schema) ?? jsonSchemaToZod(schema, { zodVersion: 3 });
+    return customZodObjectSchema(schema) ?? jsonSchemaToZod(schema, { zodVersion: 4 });
   }
 
   if (op.parameters && op.parameters.length > 0) {
@@ -185,12 +206,12 @@ function getZodSchema(op: OperationObject, method: string, path: string): string
     }
 
     return jsonSchemaToZod(
-      {
+      capInputArrays({
         type: "object",
         properties,
         ...(required.length > 0 ? { required } : {}),
-      },
-      { zodVersion: 3 },
+      }),
+      { zodVersion: 4 },
     );
   }
 
@@ -272,7 +293,7 @@ function customZodObjectSchema(schema: JsonSchema): string | null {
 
   const entries = propertyEntries.map(({ name, propSchema, customSchema }) => {
     const propertySchema =
-      customSchema ?? jsonSchemaToZod(propSchema as JsonSchema, { zodVersion: 3 });
+      customSchema ?? jsonSchemaToZod(propSchema as JsonSchema, { zodVersion: 4 });
     return `${JSON.stringify(name)}: ${propertySchema}${requiredSet.has(name) ? "" : ".optional()"}`;
   });
 
@@ -348,7 +369,10 @@ function requiresFullEnvText(op: OperationObject): boolean {
 }
 
 function handWrittenToolEntry(tool: ToolDefinition): ToolMdEntry {
-  const schema = zodToJsonSchema(tool.schema) as JsonSchemaObject;
+  const schema = z.toJSONSchema(tool.schema, {
+    io: "input",
+    unrepresentable: "any",
+  }) as JsonSchemaObject;
   const requiredSet = new Set(schema.required || []);
   return {
     operationId: tool.name,

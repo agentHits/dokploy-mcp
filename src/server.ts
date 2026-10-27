@@ -1,7 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import type { ZodObject, ZodRawShape } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { type ZodObject, type ZodType, z } from "zod";
 import { envApplyTool, envKeysTool, requiresFullEnvText } from "./envTools.js";
 import { generatedTools } from "./generated/tools.js";
 import { createHandler } from "./handler.js";
@@ -163,6 +162,30 @@ function stripUnsupportedRegexPatterns(value: unknown): void {
   for (const child of Object.values(record)) {
     stripUnsupportedRegexPatterns(child);
   }
+
+  // Zod puts the patterns of a string with several formats into allOf. Drop
+  // the entries stripping left empty and fold a single remaining pattern back
+  // into the string, so such a string looks as it did before.
+  if (Array.isArray(record.allOf)) {
+    const remaining = record.allOf.filter(
+      (entry) => typeof entry !== "object" || entry === null || Object.keys(entry).length > 0,
+    );
+    const [only] = remaining;
+    if (remaining.length === 0) {
+      delete record.allOf;
+    } else if (
+      remaining.length === 1 &&
+      record.pattern === undefined &&
+      typeof only === "object" &&
+      only !== null &&
+      Object.keys(only).join() === "pattern"
+    ) {
+      record.pattern = (only as { pattern: unknown }).pattern;
+      delete record.allOf;
+    } else {
+      record.allOf = remaining;
+    }
+  }
 }
 
 // Claude's API requires JSON Schema draft 2020-12. The MCP SDK's built-in
@@ -170,10 +193,53 @@ function stripUnsupportedRegexPatterns(value: unknown): void {
 // error on tools/list. We bypass the SDK's auto-generated handler by
 // registering our own with pre-converted draft-2020-12 schemas.
 // See https://github.com/Dokploy/mcp/issues/32
-function toDraft2020_12JsonSchema(schema: ZodObject<ZodRawShape>): Record<string, unknown> {
-  const result = zodToJsonSchema(schema, {
-    target: "jsonSchema2019-09",
-    strictUnions: true,
+function toDraft2020_12JsonSchema(
+  schema: ZodObject<Record<string, ZodType>>,
+): Record<string, unknown> {
+  const result = z.toJSONSchema(schema, {
+    target: "draft-2020-12",
+    io: "input",
+    unrepresentable: "any",
+    override: ({ zodSchema, jsonSchema }) => {
+      const { def } = zodSchema._zod;
+      // Zod writes a discriminated union as oneOf. Keep anyOf as before: the
+      // branches exclude each other anyway, and OpenAI strict mode has no oneOf.
+      if (jsonSchema.oneOf && !jsonSchema.anyOf) {
+        jsonSchema.anyOf = jsonSchema.oneOf;
+        delete jsonSchema.oneOf;
+      }
+      // A .regex() after .email() replaces the format Zod reports; keep the
+      // email format for the client.
+      if (def.type === "string") {
+        if (
+          jsonSchema.format === undefined &&
+          def.checks?.some((check) => (check._zod.def as { format?: string }).format === "email")
+        ) {
+          jsonSchema.format = "email";
+        }
+        return;
+      }
+      if (def.type !== "object") {
+        return;
+      }
+      // Input mode leaves objects open, because Zod strips unknown keys
+      // instead of rejecting them. Keep them closed as before: OpenAI strict
+      // mode requires additionalProperties: false on every object.
+      if (jsonSchema.additionalProperties === undefined) {
+        jsonSchema.additionalProperties = false;
+      }
+      // Zod lists z.any() keys as required although parsing accepts them
+      // missing. Keep such keys optional, as before.
+      const { shape } = zodSchema as unknown as ZodObject<Record<string, ZodType>>;
+      const required = jsonSchema.required?.filter(
+        (key) => !shape[key]?.safeParse(undefined).success,
+      );
+      if (required?.length) {
+        jsonSchema.required = required;
+      } else {
+        delete jsonSchema.required;
+      }
+    },
   }) as Record<string, unknown>;
 
   stripNestedSchemaKeys(result);

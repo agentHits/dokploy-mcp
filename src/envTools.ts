@@ -25,6 +25,9 @@ const SCOPES = [
 ] as const;
 const FIELDS = ["env", "buildArgs", "buildSecrets"] as const;
 const DEFAULT_FIELD = "env";
+// Zod checks .max() before it parses the elements, so an oversized list is
+// rejected with one issue instead of one per element (GHSA-mrhx-c7xc-m3w5).
+const MAX_INPUT_LIST_ITEMS = 1000;
 
 /** Read with env-keys when layout=true, and before every env-apply layout. */
 export const ENV_LAYOUT_PATH = "/env.layout";
@@ -105,7 +108,11 @@ const envApplySchema = z.object({
     .describe(
       "Variables to create or overwrite, as name -> value. Only for values you already know; never ask the user to paste a secret into the chat.",
     ),
-  remove: z.array(nameSchema).optional().describe("Names of variables to delete."),
+  remove: z
+    .array(nameSchema)
+    .max(MAX_INPUT_LIST_ITEMS)
+    .optional()
+    .describe("Names of variables to delete."),
   generate: z
     .record(
       nameSchema,
@@ -140,6 +147,7 @@ const envApplySchema = z.object({
     ),
   layout: z
     .array(layoutInputItemSchema)
+    .max(MAX_INPUT_LIST_ITEMS)
     .optional()
     .describe(
       "The whole new order of the text, edited from the 'layout' of env-keys with layout=true: move items, add comments and blank lines. Values are not touched. Sent alone, with expectedRevision.",
@@ -234,7 +242,7 @@ export function isBlindEnvTool(
 export function requiresFullEnvText(tool: ToolDefinition): boolean {
   return FULL_ENV_FIELDS.some((field) => {
     const schema = tool.schema.shape[field];
-    return schema !== undefined && !schema.isOptional();
+    return schema !== undefined && !schema.safeParse(undefined).success;
   });
 }
 
