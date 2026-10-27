@@ -1,0 +1,4 @@
+[install]
+# Freshly published versions are where hijacked releases live; most get pulled within a day.
+# One day, as in the owner's other projects and in deps-auto-update.yml (owner's decision 2026-10-27).
+minimumReleaseAge = 86400
