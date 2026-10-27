@@ -1,0 +1,296 @@
+# Автообновление зависимостей Bun, как deps-auto-update.yml в репозиториях hit-proxy (решение владельца
+# 2026-10-27; заменило Dependabot для Bun: тот двигает только прямые зависимости, а security-обновлений для
+# Bun у него нет).
+# Каждый день: bun update всего lockfile в пределах диапазонов package.json - minor и patch, прямые и
+# транзитивные пакеты, версии не моложе суток; затем bun audit. Итог - ветка deps/auto-update и один PR в
+# AgentHits-Dev. Пока PR не влит, ветка каждый день пересобирается от свежей AgentHits-Dev с самыми новыми
+# версиями. Чужой commit в ветке открытого PR останавливает пересборку до merge или закрытия PR. Workflow не
+# мержит и не деплоит.
+# Отличия от hit-proxy: база AgentHits-Dev, проверки ветки - pull-request.yml, bun workspaces (общий
+# bun.lock в корне) обновляются через bun update --recursive. Файл одинаковый в dokploy и dokploy-mcp.
+name: Deps auto-update
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # каждый день, 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deps-auto-update
+  cancel-in-progress: false
+
+env:
+  BRANCH: deps/auto-update
+  BASE: AgentHits-Dev
+  # Workflow проверок, который запускается на ветке через workflow_dispatch.
+  CI_WORKFLOW: pull-request.yml
+  # Каталоги Bun-проектов через пробел, в каждом package.json и bun.lock.
+  DEP_DIRS: "."
+  # Минимальный возраст версии в секундах: сутки, как minimumReleaseAge в bunfig.toml.
+  MIN_RELEASE_AGE: "86400"
+  BOT_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com"
+
+jobs:
+  # Новые пакеты скачиваются здесь, поэтому у job только чтение: токен read, credentials checkout не
+  # сохраняются. Пишет job publish, в котором Bun и пакеты не запускаются.
+  update:
+    if: github.ref == 'refs/heads/AgentHits-Dev'
+    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    outputs:
+      changed: ${{ steps.update.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: bun update, проверка scope и отчёт
+        id: update
+        env:
+          NO_COLOR: "1"
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/deps"
+          rm -rf "$out"
+          mkdir -p "$out/files"
+          allowed=()
+          declare -A recursive
+          for dir in $DEP_DIRS; do
+            prefix=""
+            [ "$dir" = "." ] || prefix="$dir/"
+            allowed+=("${prefix}package.json" "${prefix}bun.lock")
+            # Workspaces делят bun.lock корня: обновляются все сразу, их package.json тоже разрешены.
+            recursive[$dir]=""
+            while IFS= read -r pattern; do
+              recursive[$dir]=1
+              while IFS= read -r ws; do
+                allowed+=("${prefix}${ws}")
+              done < <(cd "$dir" && compgen -G "$pattern/package.json" || true)
+            done < <(cd "$dir" && jq -r '(.workspaces // []) | if type == "object" then (.packages // []) else . end | .[]' package.json)
+            (cd "$dir" && bun install --frozen-lockfile && bun update ${recursive[$dir]:+--recursive} --minimum-release-age="$MIN_RELEASE_AGE")
+          done
+
+          changed_files=()
+          while IFS= read -r line; do
+            path="${line:3}"
+            ok=false
+            for a in "${allowed[@]}"; do
+              if [ "$path" = "$a" ]; then ok=true; fi
+            done
+            if ! $ok; then
+              echo "::error::bun update изменил путь вне package.json и bun.lock: $path"
+              exit 1
+            fi
+            changed_files+=("$path")
+          done < <(git status --porcelain --untracked-files=all)
+
+          if [ "${#changed_files[@]}" -eq 0 ]; then
+            echo "Обновлений нет: всё актуально в пределах диапазонов и порога возраста."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          printf '%s\n' "${changed_files[@]}" > "$out/files.txt"
+          for f in "${changed_files[@]}"; do
+            mkdir -p "$out/files/$(dirname "$f")"
+            cp "$f" "$out/files/$f"
+          done
+
+          today="$(date -u +%F)"
+          : > "$out/changes.txt"
+          : > "$out/audit.txt"
+          {
+            echo "Автообновление зависимостей от $today (workflow \`deps-auto-update\`): \`bun update\` в пределах диапазонов \`package.json\`, только minor и patch, прямые и транзитивные пакеты, версии не моложе суток. Ветка пересобирается каждый день в 03:00 UTC, пока PR открыт."
+            echo
+            for dir in $DEP_DIRS; do
+              prefix=""
+              [ "$dir" = "." ] || prefix="$dir/"
+              # "-/+    \"ключ\": [\"имя@версия\"" из bun.lock -> ключ, было, стало.
+              git diff -U0 -- "${prefix}bun.lock" | perl -ne '
+                if (/^([-+])    "([^"]+)": \["(?:@[^\/"]+\/)?[^@"]+@([^"]+)"/) { $v{$2}{$1} = $3 }
+                END {
+                  for (sort keys %v) {
+                    my ($o, $n) = ($v{$_}{"-"} // "", $v{$_}{"+"} // "");
+                    print join("\t", $_, $o, $n), "\n" if $o ne $n;
+                  }
+                }' > "$out/changes.tsv"
+              audit="$(cd "$dir" && bun audit 2>&1 || true)"
+              audit_line="$(printf '%s\n' "$audit" | grep -E 'vulnerabilit' | tail -n 1 || true)"
+              echo "${prefix:-./}: ${audit_line:-bun audit без итога}" >> "$out/audit.txt"
+              awk -F'\t' -v p="$prefix" '{ printf "%s%s %s -> %s\n", p, $1, ($2 == "" ? "(новый)" : $2), ($3 == "" ? "(удалён)" : $3) }' "$out/changes.tsv" >> "$out/changes.txt"
+
+              echo "### \`$dir\` — пакетов: $(wc -l < "$out/changes.tsv" | tr -d ' ')"
+              echo
+              echo "| Пакет | Было | Стало |"
+              echo "|---|---|---|"
+              awk -F'\t' '{ printf "| `%s` | %s | %s |\n", $1, ($2 == "" ? "—" : $2), ($3 == "" ? "удалён" : $3) }' "$out/changes.tsv"
+              echo
+              echo "**bun audit:** ${audit_line:-нет итоговой строки, см. ниже}"
+              echo
+              echo "<details><summary>Вывод bun audit</summary>"
+              echo
+              echo '```'
+              printf '%s\n' "$audit" | tail -n 60
+              echo '```'
+              echo "</details>"
+              echo
+              echo "<details><summary>bun outdated: колонка Latest выше Update - это major, их workflow не берёт</summary>"
+              echo
+              echo '```'
+              (cd "$dir" && bun outdated ${recursive[$dir]:+--recursive} 2>&1 || true) | tail -n 120
+              echo '```'
+              echo "</details>"
+              echo
+            done
+            echo "---"
+            echo "Перед merge: зелёный прогон \`$CI_WORKFLOW\` с событием \`workflow_dispatch\` на голове PR (workflow запускает его сам: push от GITHUB_TOKEN событие pull_request не создаёт). Commit в эту ветку останавливает ежедневную пересборку. Major - отдельными PR."
+          } > "$out/report.md"
+
+          total="$(wc -l < "$out/changes.txt" | tr -d ' ')"
+          {
+            echo "зависимости: автообновление библиотек ($today)"
+            echo
+            echo "Что сделано: bun update в пределах диапазонов package.json (workflow"
+            echo "deps-auto-update), версии не моложе суток. Изменено пакетов: $total."
+            echo
+            head -n 80 "$out/changes.txt"
+            if [ "$total" -gt 80 ]; then echo "... и ещё $((total - 80)), полный список в PR."; fi
+            echo
+            echo "Зачем: ежедневное автообновление зависимостей (решение владельца"
+            echo "2026-10-27), включая транзитивные пакеты, которые Dependabot не двигает."
+            echo
+            echo "Проверки: bun install --frozen-lockfile до обновления; bun audit:"
+            cat "$out/audit.txt"
+            echo "Проверки ветки запускаются отдельно ($CI_WORKFLOW, workflow_dispatch)."
+          } > "$out/commit.txt"
+
+          cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        if: steps.update.outputs.changed == 'true'
+        with:
+          name: deps-auto-update
+          path: ${{ runner.temp }}/deps
+          retention-days: 3
+
+  publish:
+    needs: update
+    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        if: needs.update.outputs.changed == 'true'
+        with:
+          name: deps-auto-update
+          path: ${{ runner.temp }}/deps
+      - name: Открытый PR ветки
+        id: pr
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { data } = await github.rest.pulls.list({
+              ...context.repo,
+              state: 'open',
+              head: `${context.repo.owner}:${process.env.BRANCH}`,
+              base: process.env.BASE,
+            });
+            core.setOutput('number', data.length ? String(data[0].number) : '');
+      - name: Commit и push ветки
+        id: branch
+        env:
+          CHANGED: ${{ needs.update.outputs.changed }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          remote=false
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+            git fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+            remote=true
+          fi
+          if [ -n "$PR" ] && $remote; then
+            foreign="$(git log --format='%h %ae' "origin/$BASE..origin/$BRANCH" | grep -v -F " $BOT_EMAIL" || true)"
+            if [ -n "$foreign" ]; then
+              echo "::notice::В ветке $BRANCH открытого PR #$PR есть чужие commit, пересборка остановлена до merge или закрытия PR: $(echo "$foreign" | tr '\n' ' ')"
+              echo "action=skip" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          if [ "$CHANGED" != "true" ]; then
+            echo "action=close" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "$BOT_EMAIL"
+          git checkout -q -B "$BRANCH"
+          cp -R "$RUNNER_TEMP/deps/files/." .
+          mapfile -t files < "$RUNNER_TEMP/deps/files.txt"
+          git add -- "${files[@]}"
+          git commit -q -F "$RUNNER_TEMP/deps/commit.txt"
+          if $remote && [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "origin/$BRANCH^{tree}")" ]; then
+            echo "Ветка $BRANCH уже содержит то же дерево: push не нужен."
+            echo "action=same" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git push -q --force origin "HEAD:refs/heads/$BRANCH"
+          echo "action=pushed" >> "$GITHUB_OUTPUT"
+      - name: PR и проверки ветки
+        uses: actions/github-script@v8
+        env:
+          ACTION: ${{ steps.branch.outputs.action }}
+          PR: ${{ steps.pr.outputs.number }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const { ACTION: action, BRANCH: branch, BASE: base, CI_WORKFLOW: ciWorkflow, RUNNER_TEMP: tmp } = process.env;
+            const repo = context.repo;
+            let pr = process.env.PR ? Number(process.env.PR) : null;
+            const summary = (text) => core.summary.addRaw(`${text}\n`).write();
+
+            if (action === 'skip') {
+              await summary(`PR #${pr}: в ветке чужие commit, пересборка пропущена.`);
+              return;
+            }
+            if (action === 'close') {
+              if (pr) {
+                await github.rest.issues.createComment({ ...repo, issue_number: pr, body: `Обновлений нет: ${base} уже содержит актуальные версии в пределах диапазонов. PR закрыт, ветка удалена.` });
+                await github.rest.pulls.update({ ...repo, pull_number: pr, state: 'closed' });
+              }
+              try {
+                await github.rest.git.deleteRef({ ...repo, ref: `heads/${branch}` });
+              } catch (error) {
+                if (error.status !== 404 && error.status !== 422) throw error;
+              }
+              await summary(pr ? `Обновлений нет, PR #${pr} закрыт.` : 'Обновлений нет.');
+              return;
+            }
+
+            const title = 'зависимости: автообновление библиотек';
+            let body = fs.readFileSync(`${tmp}/deps/report.md`, 'utf8');
+            if (body.length > 60000) body = `${body.slice(0, 60000)}\n\n… отчёт обрезан, полный - в summary прогона.`;
+            if (pr) {
+              await github.rest.pulls.update({ ...repo, pull_number: pr, title, body });
+            } else {
+              try {
+                ({ data: { number: pr } } = await github.rest.pulls.create({ ...repo, head: branch, base, title, body }));
+              } catch (error) {
+                core.setFailed(`Ветка ${branch} обновлена, но PR не создан (${error.status}: ${error.message}). Разрешите Actions создавать PR: Settings репозитория (и организации, если она есть) → Actions → General → Workflow permissions → «Allow GitHub Actions to create and approve pull requests».`);
+              }
+            }
+            if (action === 'pushed') {
+              await github.rest.actions.createWorkflowDispatch({ ...repo, workflow_id: ciWorkflow, ref: branch });
+            }
+            await summary(pr ? `PR #${pr}: ${action === 'pushed' ? `ветка обновлена, ${ciWorkflow} запущен` : 'ветка без изменений, описание обновлено'}.` : `Ветка ${branch} обновлена, PR нет.`);

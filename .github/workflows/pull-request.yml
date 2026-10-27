@@ -5,6 +5,9 @@ on:
     branches: [AgentHits-Dev]
   push:
     branches: [AgentHits-Dev]
+  # deps-auto-update.yml starts the checks of its branch this way: a push with
+  # GITHUB_TOKEN creates no pull_request event.
+  workflow_dispatch:
 
 concurrency:
   group: checks-${{ github.ref }}
