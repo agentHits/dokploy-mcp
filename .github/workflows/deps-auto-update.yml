@@ -1,4 +1,4 @@
-# Автообновление зависимостей Bun, как deps-auto-update.yml в репозиториях hit-proxy (решение владельца
+# Автообновление зависимостей Bun, как deps-auto-update.yml в других проектах владельца (решение
 # 2026-10-27; заменило Dependabot для Bun: тот двигает только прямые зависимости, а security-обновлений для
 # Bun у него нет).
 # Каждый день: bun update всего lockfile в пределах диапазонов package.json - minor и patch, прямые и
@@ -6,7 +6,7 @@
 # AgentHits-Dev. Пока PR не влит, ветка каждый день пересобирается от свежей AgentHits-Dev с самыми новыми
 # версиями. Чужой commit в ветке открытого PR останавливает пересборку до merge или закрытия PR. Workflow не
 # мержит и не деплоит.
-# Отличия от hit-proxy: база AgentHits-Dev, проверки ветки - pull-request.yml, bun workspaces (общий
+# Отличия от других проектов: база AgentHits-Dev, проверки ветки - pull-request.yml, bun workspaces (общий
 # bun.lock в корне) обновляются через bun update --recursive. Файл одинаковый в dokploy и dokploy-mcp.
 name: Deps auto-update
 
