@@ -2073,11 +2073,14 @@ describe("MCP server tools/list", () => {
     const tools = await getToolList();
     const keys = tools.find(({ name }) => name === "env-keys");
     const apply = tools.find(({ name }) => name === "env-apply");
-    const keysProperties = (keys?.inputSchema as Record<string, unknown>).properties as Record<
+    if (!keys || !apply) {
+      throw new Error("env-keys and env-apply must be listed");
+    }
+    const keysProperties = (keys.inputSchema as Record<string, unknown>).properties as Record<
       string,
       Record<string, unknown>
     >;
-    const applyProperties = (apply?.inputSchema as Record<string, unknown>).properties as Record<
+    const applyProperties = (apply.inputSchema as Record<string, unknown>).properties as Record<
       string,
       Record<string, unknown>
     >;

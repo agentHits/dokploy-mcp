@@ -167,17 +167,17 @@ describe("http-server app", () => {
       });
     });
 
-    it.each([
-      "/mcp",
-      "/messages?sessionId=x",
-    ])("rejects a body without Content-Length once it passes the limit on %s", async (path) => {
-      const res = await createApp(TOKEN).request(
-        path,
-        post(streamOf(MAX_BODY_BYTES + 1), auth),
-        BINDINGS,
-      );
-      expect(res.status).toBe(413);
-    });
+    it.each(["/mcp", "/messages?sessionId=x"])(
+      "rejects a body without Content-Length once it passes the limit on %s",
+      async (path) => {
+        const res = await createApp(TOKEN).request(
+          path,
+          post(streamOf(MAX_BODY_BYTES + 1), auth),
+          BINDINGS,
+        );
+        expect(res.status).toBe(413);
+      },
+    );
 
     it("passes a body under the limit to the route", async () => {
       const body = NOT_INITIALIZE.padEnd(MAX_BODY_BYTES - 1, " ");
