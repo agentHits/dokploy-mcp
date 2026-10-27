@@ -235,12 +235,15 @@ The Docker container supports both **stdio** and **HTTP** transport modes, makin
 
     ```bash
     docker run -it --rm \
-      -p 8080:3000 \
+      -p 127.0.0.1:8080:3000 \
       -e MCP_TRANSPORT=http \
+      -e MCP_AUTH_TOKEN="$(openssl rand -hex 32)" \
       -e DOKPLOY_URL=https://your-dokploy-server.com \
       -e DOKPLOY_API_KEY=your_token_here \
       dokploy-mcp
     ```
+
+    Clients then send `Authorization: Bearer <MCP_AUTH_TOKEN>`; see [Authentication and limits](#authentication-and-limits).
 
 3.  **Docker Compose:**
 
@@ -280,7 +283,12 @@ The Docker container supports both **stdio** and **HTTP** transport modes, makin
 
     **For HTTP mode (web applications):**
 
-    Start the HTTP server first, then configure your client to connect to `http://localhost:3000/mcp`.
+    Start the HTTP server first, then configure your client to connect to `http://localhost:3000/mcp` with the header `Authorization: Bearer <MCP_AUTH_TOKEN>`. For Claude Code:
+
+    ```bash
+    claude mcp add --transport http dokploy http://localhost:3000/mcp \
+      --header "Authorization: Bearer $MCP_AUTH_TOKEN"
+    ```
 
 ### Install in Windows
 
@@ -316,6 +324,7 @@ The configuration on Windows is slightly different compared to Linux or macOS. U
 | `DOKPLOY_RETRY_DELAY` | No | Delay between retries in milliseconds (default: `1000`) |
 | `DOKPLOY_REDACT_ENV` | No | Ignored. Secret values are always removed from tool results; `false` only logs a warning at startup. See [Secrets never reach the model](#secrets-never-reach-the-model). |
 | `DOKPLOY_REDACT_FIELDS` | No | Comma-separated extra field names to redact. They are added to the built-in list and cannot remove anything from it. A name matches a field when the field name ends with it, at any nesting depth, ignoring case, `_` and `-`. Built-in list: `env`, `buildArgs`, `buildSecrets`, `previewBuildSecrets`, `previewEnv`, `previewBuildArgs`, `password`, `currentPassword`, `appPassword`, `databasePassword`, `databaseRootPassword`, `redisPassword`, `mariadbPassword`, `mongoPassword`, `mysqlPassword`, `postgresPassword`, `registryPassword`, `token`, `accessToken`, `appToken`, `apiToken`, `botToken`, `refreshToken`, `metricsToken`, `secret`, `clientSecret`, `webhookSecret`, `githubClientSecret`, `githubWebhookSecret`, `apiKey`, `secretKey`, `secretAccessKey`, `accessKey`, `applicationKey`, `consumerKey`, `licenseKey`, `userKey`, `privateKey`, `privateKeyPass`, `encPrivateKey`, `encPrivateKeyPass`, `githubPrivateKey`, `sshKey`, `sshPrivateKey`, `customGitSSHKey`, `dockerAuth`, `authorization`, `cookie`, `credentials`, `connectionString`, `dsn`, `webhookUrl`. |
+| `MCP_AUTH_TOKEN` | No (HTTP/SSE mode) | Bearer token every HTTP endpoint except `/health` requires. At least 32 characters of `A-Z`, `a-z`, `0-9` and `._~+/-`, for example `openssl rand -hex 32`; the server refuses to start with a shorter one. Unset: no authentication and a warning at startup. See [Authentication and limits](#authentication-and-limits). |
 
 For Dokploy instances behind Cloudflare Access or a similar reverse proxy, pass service-token headers with placeholder values like this:
 
@@ -382,6 +391,14 @@ MCP_TRANSPORT=http npx -y @dokploy/mcp
 |----------|--------|-------------|
 | `/sse` | GET | SSE stream initialization |
 | `/messages` | POST | Client message posting |
+
+#### Authentication and limits
+
+Whoever can call these endpoints acts with the server's `DOKPLOY_API_KEY`. Set `MCP_AUTH_TOKEN` and every endpoint except `/health` requires `Authorization: Bearer <token>`: a missing or wrong token gets `401` with a `WWW-Authenticate` header, another scheme gets `400`. The token is checked before the body is read and compared in constant time. Without `MCP_AUTH_TOKEN` the endpoints stay open and the server logs a warning at startup, so only run it like that on `127.0.0.1`.
+
+Request bodies are limited to 4 MB, with or without `Content-Length`; a larger body gets `413`.
+
+`docker-compose.yml` publishes the port on `127.0.0.1` (`EXTERNAL_HOST`). Before you publish it on other interfaces, set `MCP_AUTH_TOKEN` and put TLS in front of the server, so the token does not travel in plain text.
 
 ## Available Tools (508)
 

@@ -5,10 +5,17 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { Hono } from "hono";
+import { bearerAuth } from "hono/bearer-auth";
+import { bodyLimit } from "hono/body-limit";
 import { createServer } from "./server.js";
 import { createLogger } from "./utils/logger.js";
 
 const PORT = 3000;
+// The MCP SDK transports cap the bodies they parse themselves at 4 MB.
+export const MAX_BODY_BYTES = 4 * 1024 * 1024;
+const MIN_AUTH_TOKEN_LENGTH = 32;
+// The token characters hono's bearerAuth accepts in the Authorization header.
+const AUTH_TOKEN_PATTERN = /^[A-Za-z0-9._~+/-]+=*$/;
 const logger = createLogger("MCP-HTTP-Server");
 
 const jsonrpcError = (code: number, message: string) => ({
@@ -16,6 +23,19 @@ const jsonrpcError = (code: number, message: string) => ({
   error: { code, message },
   id: null,
 });
+
+export function readAuthToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const token = env.MCP_AUTH_TOKEN?.trim();
+  if (!token) {
+    return undefined;
+  }
+  if (token.length < MIN_AUTH_TOKEN_LENGTH || !AUTH_TOKEN_PATTERN.test(token)) {
+    throw new Error(
+      `MCP_AUTH_TOKEN must be at least ${MIN_AUTH_TOKEN_LENGTH} characters of A-Z, a-z, 0-9 and ._~+/- (for example, the output of \`openssl rand -hex 32\`)`,
+    );
+  }
+  return token;
+}
 
 // When MCP transport takes over the raw Node response, we must prevent
 // Hono/@hono/node-server from trying to write its own response headers.
@@ -25,10 +45,7 @@ function neverResolve(): Promise<never> {
   return new Promise(() => {});
 }
 
-// Only src/index.ts starts the server. `bun build` puts this module into
-// build/index.js, the file in process.argv[1], so a self-start check here
-// would run next to that call and the second listen would crash on the port.
-export async function main() {
+export function createApp(authToken: string | undefined) {
   const app = new Hono<{ Bindings: HttpBindings }>();
 
   const transports = {
@@ -38,6 +55,30 @@ export async function main() {
 
   // Health check
   app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
+
+  // Registered after /health, so the health check stays open and every
+  // route added below needs the token.
+  if (authToken) {
+    app.use(
+      "*",
+      bearerAuth({
+        token: authToken,
+        noAuthenticationHeader: { message: jsonrpcError(-32001, "Unauthorized") },
+        invalidAuthenticationHeader: {
+          message: jsonrpcError(-32001, "Invalid Authorization header"),
+        },
+        invalidToken: { message: jsonrpcError(-32001, "Unauthorized") },
+      }),
+    );
+  }
+
+  app.use(
+    "*",
+    bodyLimit({
+      maxSize: MAX_BODY_BYTES,
+      onError: (c) => c.json(jsonrpcError(-32000, "Payload Too Large"), 413),
+    }),
+  );
 
   // Modern Streamable HTTP - POST
   app.post("/mcp", async (c) => {
@@ -185,9 +226,25 @@ export async function main() {
     }
   });
 
+  return app;
+}
+
+// Only src/index.ts starts the server. `bun build` puts this module into
+// build/index.js, the file in process.argv[1], so a self-start check here
+// would run next to that call and the second listen would crash on the port.
+export async function main() {
+  const authToken = readAuthToken();
+  if (!authToken) {
+    logger.warn(
+      "MCP_AUTH_TOKEN is not set: anyone who can reach this port can call every Dokploy tool with this server's API key",
+    );
+  }
+  const app = createApp(authToken);
+
   serve({ fetch: app.fetch, port: PORT }, () => {
     logger.info("MCP Dokploy server started", {
       port: PORT,
+      auth: authToken ? "bearer" : "none",
       protocols: ["Streamable HTTP (MCP 2025-03-26)", "Legacy SSE (MCP 2024-11-05)"],
       endpoints: {
         modern: `http://localhost:${PORT}/mcp`,
