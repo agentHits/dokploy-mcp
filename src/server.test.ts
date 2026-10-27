@@ -19,6 +19,7 @@ const mocked = <T>(value: T): T => value;
 const { default: apiClient } = await import("./utils/apiClient.js");
 const { generatedTools } = await import("./generated/tools.js");
 const { createServer } = await import("./server.js");
+const { envApplyTool } = await import("./envTools.js");
 
 // superPassword-status, env-keys and env-apply are loaded on top of every
 // preset and tag filter.
@@ -346,6 +347,94 @@ describe("MCP server tools/list", () => {
         `Tool "${tool.name}" exposes provider-incompatible patterns at: ${found.join(", ")}`,
       ).toHaveLength(0);
     }
+  });
+
+  // Zod checks .max() before it parses the elements, so a capped array is
+  // rejected with one issue instead of one per element (GHSA-mrhx-c7xc-m3w5).
+  it("caps every input array at 1000 items", async () => {
+    const tools = await getToolList();
+
+    function findUncappedArrays(obj: unknown, path = ""): string[] {
+      if (obj === null || typeof obj !== "object") return [];
+      if (Array.isArray(obj)) {
+        return obj.flatMap((item, i) => findUncappedArrays(item, `${path}[${i}]`));
+      }
+      const record = obj as Record<string, unknown>;
+      const isArray =
+        record.type === "array" || (Array.isArray(record.type) && record.type.includes("array"));
+      const found =
+        isArray && !(typeof record.maxItems === "number" && record.maxItems <= 1000)
+          ? [path || "(root)"]
+          : [];
+      for (const [key, value] of Object.entries(record)) {
+        found.push(...findUncappedArrays(value, path ? `${path}.${key}` : key));
+      }
+      return found;
+    }
+
+    for (const tool of tools) {
+      const found = findUncappedArrays(tool.inputSchema);
+      expect(found, `Tool "${tool.name}" has uncapped arrays at: ${found.join(", ")}`).toHaveLength(
+        0,
+      );
+    }
+  });
+
+  it("rejects an oversized array with a single issue", () => {
+    const tool = generatedTools.find((candidate) => candidate.name === "network-import");
+    const result = tool?.schema.safeParse({ names: Array.from({ length: 1_000_000 }, () => 1) });
+
+    expect(result?.success).toBe(false);
+    expect(result?.error?.issues).toHaveLength(1);
+    expect(result?.error?.issues[0]).toMatchObject({ code: "too_big", path: ["names"] });
+  });
+
+  it("caps the lists env-apply takes", () => {
+    const result = envApplyTool.schema.safeParse({
+      scope: "application",
+      id: "app-1",
+      remove: Array.from({ length: 1001 }, () => "NAME"),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toContainEqual(
+      expect.objectContaining({ code: "too_big", path: ["remove"] }),
+    );
+  });
+
+  it("keeps the input schema shape of the previous converter", async () => {
+    const tools = await getToolList();
+    const schemas = new Map(
+      tools.map((tool) => [tool.name, tool.inputSchema as Record<string, unknown>]),
+    );
+    const propertiesOf = (name: string) =>
+      schemas.get(name)?.properties as Record<string, Record<string, unknown>>;
+
+    function findOpenObjects(obj: unknown, path = ""): string[] {
+      if (obj === null || typeof obj !== "object") return [];
+      if (Array.isArray(obj)) {
+        return obj.flatMap((item, i) => findOpenObjects(item, `${path}[${i}]`));
+      }
+      const record = obj as Record<string, unknown>;
+      const found = record.properties && record.additionalProperties === undefined ? [path] : [];
+      for (const [key, value] of Object.entries(record)) {
+        found.push(...findOpenObjects(value, path ? `${path}.${key}` : key));
+      }
+      return found;
+    }
+
+    for (const tool of tools) {
+      const serialized = JSON.stringify(tool.inputSchema);
+      expect(serialized, `Tool "${tool.name}" uses oneOf`).not.toContain('"oneOf"');
+      expect(findOpenObjects(tool.inputSchema), `Tool "${tool.name}" has open objects`).toEqual([]);
+    }
+    // z.any() accepts a missing key, so it is not listed as required.
+    expect(schemas.get("backup-update")?.required).not.toContain("metadata");
+    // .email().regex(<lookaround>): the format stays, the stripped pattern leaves no allOf.
+    expect(propertiesOf("bitbucket-create").bitbucketEmail).toEqual({
+      type: "string",
+      format: "email",
+    });
   });
 
   it("all tools have name, inputSchema with type=object", async () => {
