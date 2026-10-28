@@ -48,7 +48,7 @@
   "dependencies": {
     "@hono/node-server": "^1.19.17",
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "axios": "^1.20.0",
+    "axios": "^1.21.0",
     "hono": "^4.13.14",
     "zod": "^4.6.7"
   },
