@@ -3,7 +3,6 @@ import { resolve } from "node:path";
 import { type JsonSchema, jsonSchemaToZod } from "json-schema-to-zod";
 import { z } from "zod";
 import { envApplyTool, envKeysTool, FULL_ENV_FIELDS } from "../src/envTools.js";
-import { superPasswordStatusTool } from "../src/superPassword.js";
 import type { ToolDefinition } from "../src/types.js";
 
 interface OpenAPISpec {
@@ -551,7 +550,7 @@ ${tools.join(",\n")},
   writeFileSync(OUTPUT_PATH, output);
   console.log(`Generated ${tools.length} tools (${errorCount} errors) -> ${OUTPUT_PATH}`);
 
-  for (const tool of [superPasswordStatusTool, envKeysTool, envApplyTool]) {
+  for (const tool of [envKeysTool, envApplyTool]) {
     mdEntries.push(handWrittenToolEntry(tool));
   }
 

@@ -2,8 +2,8 @@
 
 > Auto-generated from the [Dokploy OpenAPI spec](https://docs.dokploy.com/openapi.json). Run `pnpm generate` to update.
 
-- **Total Tools**: 602
-- **Categories**: 59
+- **Total Tools**: 601
+- **Categories**: 58
 
 Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv`) are not exposed. Variables are managed with `env-keys` and `env-apply`, which never return values.
 
@@ -61,7 +61,6 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 - [sshKey](#sshKey) (7 tools)
 - [sso](#sso) (11 tools)
 - [stripe](#stripe) (10 tools)
-- [superPassword](#superPassword) (1 tools)
 - [swarm](#swarm) (4 tools)
 - [tag](#tag) (8 tools)
 - [user](#user) (26 tools)
@@ -874,12 +873,6 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 | `stripe-canCreateMoreServers` | GET | None |
 | `stripe-updateInvoiceNotifications` | POST | `enabled` (boolean) |
 | `stripe-getInvoices` | GET | None |
-
-## superPassword
-
-| Tool | Method | Parameters |
-|------|--------|------------|
-| `superPassword-status` | GET | None |
 
 ## swarm
 
