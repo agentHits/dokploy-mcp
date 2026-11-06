@@ -52,10 +52,10 @@ There are many ways you can contribute to the project:
 
 ## Dependency updates
 
-`.github/workflows/deps-auto-update.yml` runs every day at 03:00 UTC (manually: `gh workflow run deps-auto-update.yml --repo agentHits/dokploy-mcp --ref AgentHits-Dev`). It runs `bun update` within the `package.json` ranges (minor and patch, direct and transitive packages, versions at least one day old), then `bun audit`, and keeps one PR `зависимости: автообновление библиотек` from `deps/auto-update` into `AgentHits-Dev`, rebuilt daily until it is merged. It starts `pull-request.yml` on the branch through `workflow_dispatch`; judge the PR by that run. It never merges. It needs "Allow GitHub Actions to create and approve pull requests" in the repository's Actions settings.
+`.github/workflows/deps-auto-update.yml` runs every day at 03:00 UTC (manually: `gh workflow run deps-auto-update.yml --repo agentHits/dokploy-mcp --ref AgentHits-Dev`). It runs `bun update` within the `package.json` ranges (minor and patch, direct and transitive packages, as soon as they are published), then `bun audit`, and keeps one PR `зависимости: автообновление библиотек` from `deps/auto-update` into `AgentHits-Dev`, rebuilt daily until it is merged. It starts `pull-request.yml` on the branch through `workflow_dispatch`; judge the PR by that run. It never merges. It needs "Allow GitHub Actions to create and approve pull requests" in the repository's Actions settings.
 
-*   Major updates are done by hand, one PR each, with `bun add <pkg>@<ver>` (the one-day age comes from `bunfig.toml`).
-*   The one-day age is `minimumReleaseAge` in `bunfig.toml` and `MIN_RELEASE_AGE` in the workflow; change both together.
+*   Major updates are done by hand, one PR each, with `bun add <pkg>@<ver>`.
+*   New versions are taken as soon as they are published: the owner dropped the one-day release age on 2026-11-06. Do not set Bun's `minimumReleaseAge` or `--minimum-release-age` again.
 *   `.github/workflows/dependency-audit.yml` runs `bun audit` every Monday for advisories published between updates.
 *   After merging, rebuild `build/` where the server runs (`bun install --frozen-lockfile && bun run build`).
 
