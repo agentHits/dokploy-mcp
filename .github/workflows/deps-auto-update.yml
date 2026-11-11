@@ -1,17 +1,20 @@
 # Автообновление зависимостей Bun, как deps-auto-update.yml в других проектах владельца (решение
 # 2026-10-27; заменило Dependabot для Bun: тот двигает только прямые зависимости, а security-обновлений для
 # Bun у него нет).
-# Каждый день: bun update всего lockfile в пределах диапазонов package.json - minor и patch, прямые и
+# bun update всего lockfile в пределах диапазонов package.json - minor и patch, прямые и
 # транзитивные пакеты, свежие версии сразу после выхода; затем bun audit. Итог - ветка deps/auto-update и один PR в
-# AgentHits-Dev. Пока PR не влит, ветка каждый день пересобирается от свежей AgentHits-Dev с самыми новыми
-# версиями. Чужой commit в ветке открытого PR останавливает пересборку до merge или закрытия PR. Workflow не
-# мержит и не деплоит.
+# AgentHits-Dev. Пока PR не влит, ветка пересобирается от свежей AgentHits-Dev с самыми новыми версиями
+# после каждого push в AgentHits-Dev и раз в день: проверки PR всегда идут на последнем commit базы, а не на
+# устаревшей, и отчёт по библиотекам правдив. Чужой commit в ветке открытого PR останавливает пересборку до
+# merge или закрытия PR. Workflow не мержит и не деплоит.
 # Отличия от других проектов: база AgentHits-Dev, проверки ветки - CI_WORKFLOWS, bun workspaces (общий
 # bun.lock в корне) обновляются через bun update --recursive. Файл одинаковый в dokploy и dokploy-mcp, кроме
 # значения CI_WORKFLOWS: образ панели собирается только в dokploy.
 name: Deps auto-update
 
 on:
+  push:
+    branches: [AgentHits-Dev]
   schedule:
     - cron: "0 3 * * *" # каждый день, 03:00 UTC
   workflow_dispatch:
@@ -19,9 +22,11 @@ on:
 permissions:
   contents: read
 
+# Нужен только прогон на последнем commit базы: новый push отменяет прогон на устаревшем. Отмена посреди publish
+# безопасна: следующий прогон собирает ветку от более новой базы, дерево другое, и он пушит и запускает проверки.
 concurrency:
   group: deps-auto-update
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   BRANCH: deps/auto-update
@@ -105,7 +110,7 @@ jobs:
           : > "$out/changes.txt"
           : > "$out/audit.txt"
           {
-            echo "Автообновление зависимостей от $today (workflow \`deps-auto-update\`): \`bun update\` в пределах диапазонов \`package.json\`, только minor и patch, прямые и транзитивные пакеты, свежие версии сразу после выхода. Ветка пересобирается каждый день в 03:00 UTC, пока PR открыт."
+            echo "Автообновление зависимостей от $today (workflow \`deps-auto-update\`): \`bun update\` в пределах диапазонов \`package.json\`, только minor и patch, прямые и транзитивные пакеты, свежие версии сразу после выхода. Пока PR открыт, ветка пересобирается от последнего commit \`AgentHits-Dev\` после каждого push в неё и каждый день в 03:00 UTC."
             echo
             for dir in $DEP_DIRS; do
               prefix=""
@@ -148,7 +153,7 @@ jobs:
               echo
             done
             echo "---"
-            echo "Перед merge: зелёные прогоны \`$CI_WORKFLOWS\` с событием \`workflow_dispatch\` на голове PR (workflow запускает их сам: push от GITHUB_TOKEN событие pull_request не создаёт). Commit в эту ветку останавливает ежедневную пересборку. Major - отдельными PR."
+            echo "Перед merge: зелёные прогоны \`$CI_WORKFLOWS\` с событием \`workflow_dispatch\` на голове PR (workflow запускает их сам: push от GITHUB_TOKEN событие pull_request не создаёт). Commit в эту ветку останавливает пересборку. Major - отдельными PR."
           } > "$out/report.md"
 
           total="$(wc -l < "$out/changes.txt" | tr -d ' ')"
