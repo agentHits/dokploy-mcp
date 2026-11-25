@@ -1,32 +1,44 @@
-# Автообновление зависимостей Bun, как deps-auto-update.yml в других проектах владельца (решение
-# 2026-10-27; заменило Dependabot для Bun: тот двигает только прямые зависимости, а security-обновлений для
-# Bun у него нет).
-# bun update всего lockfile в пределах диапазонов package.json - minor и patch, прямые и
-# транзитивные пакеты, свежие версии сразу после выхода; затем bun audit. Итог - ветка deps/auto-update и один PR в
-# AgentHits-Dev. Пока PR не влит, ветка пересобирается от свежей AgentHits-Dev с самыми новыми версиями
-# после каждого push в AgentHits-Dev и раз в день: проверки PR всегда идут на последнем commit базы, а не на
-# устаревшей, и отчёт по библиотекам правдив. Чужой commit в ветке открытого PR останавливает пересборку до
-# merge или закрытия PR. Workflow не мержит и не деплоит.
-# Отличия от других проектов: база AgentHits-Dev, проверки ветки - CI_WORKFLOWS, bun workspaces (общий
-# bun.lock в корне) обновляются через bun update --recursive. Файл одинаковый в dokploy и dokploy-mcp, кроме
-# значения CI_WORKFLOWS: образ панели собирается только в dokploy.
+# Автообновление зависимостей Bun (заменило Dependabot для Bun: тот двигает только прямые
+# зависимости, а security-обновлений для Bun у него нет).
+# 2-уровневая политика обновлений против npm supply-chain червей:
+# - Обычные обновления (после push в AgentHits-Dev и по расписанию 1x/сут, 04:10 UTC):
+#   bun update --ignore-scripts с cooldown 72 ч (minimumReleaseAge = 259200 с); затем bun audit.
+# - Подтверждённые CVE/GHSA: ручной workflow_dispatch с min_release_age="0" или точечным cve_pkg
+#   (передаётся в --minimum-release-age-excludes).
+# Итог - ветка deps/auto-update и один PR в AgentHits-Dev. Пока PR не влит, ветка пересобирается от
+# свежей AgentHits-Dev. Чужой commit в ветке открытого PR останавливает пересборку до merge или
+# закрытия PR. Workflow не мержит и не деплоит.
 name: Deps auto-update
 
 on:
   push:
     branches: [AgentHits-Dev]
   schedule:
-    - cron: "0 3 * * *" # каждый день, 03:00 UTC
+    - cron: "10 4 * * *" # каждый день, 04:10 UTC
   workflow_dispatch:
+    inputs:
+      min_release_age:
+        description: "Минимальный возраст релиза пакета в секундах (259200 = 72 ч; 0 — срочный фикс подтверждённой CVE)"
+        type: string
+        required: false
+        default: "259200"
+      cve_pkg:
+        description: "Пакеты-исключения из cooldown для CVE-фикса (через запятую или пробел, minimumReleaseAgeExcludes)"
+        type: string
+        required: false
+        default: ""
+      redispatch:
+        description: "Внутренний флаг повторного запуска при обновлении базовой ветки (не задавать вручную)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
 
-# Нужен только прогон на последнем commit базы: новый push отменяет прогон на устаревшем. Отмена посреди publish
-# безопасна: следующий прогон собирает ветку от более новой базы, дерево другое, и он пушит и запускает проверки.
 concurrency:
   group: deps-auto-update
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   BRANCH: deps/auto-update
@@ -42,24 +54,46 @@ jobs:
   # сохраняются. Пишет job publish, в котором Bun и пакеты не запускаются.
   update:
     if: github.ref == 'refs/heads/AgentHits-Dev'
-    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       changed: ${{ steps.update.outputs.changed }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.4
+          bun-version: "1.4.4"
       - name: bun update, проверка scope и отчёт
         id: update
         env:
           NO_COLOR: "1"
+          MIN_RELEASE_AGE: ${{ inputs.min_release_age != '' && inputs.min_release_age || '259200' }}
+          CVE_PKG: ${{ inputs.cve_pkg || '' }}
         run: |
           set -euo pipefail
+          if ! [[ "$MIN_RELEASE_AGE" =~ ^[0-9]+$ ]]; then
+            echo "::error::min_release_age должен быть неотрицательным целым числом (секунды), получено: '$MIN_RELEASE_AGE'"
+            exit 1
+          fi
+          excludes_csv=""
+          if [ -n "${CVE_PKG//[,[:space:]]/}" ]; then
+            cleaned="$(printf '%s' "$CVE_PKG" | tr ',[:space:]' '\n' | sed '/^$/d')"
+            while IFS= read -r pkg; do
+              if ! [[ "$pkg" =~ ^(@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+$ ]]; then
+                echo "::error::Некорректное имя пакета в cve_pkg: '$pkg'"
+                exit 1
+              fi
+              excludes_csv="${excludes_csv:+${excludes_csv},}${pkg}"
+            done <<< "$cleaned"
+          fi
+          update_args=(--ignore-scripts "--minimum-release-age=${MIN_RELEASE_AGE}")
+          if [ -n "$excludes_csv" ]; then
+            update_args+=("--minimum-release-age-excludes=${excludes_csv}")
+          fi
+
           out="$RUNNER_TEMP/deps"
           rm -rf "$out"
           mkdir -p "$out/files"
@@ -72,20 +106,23 @@ jobs:
             # Workspaces делят bun.lock корня: обновляются все сразу, их package.json тоже разрешены.
             recursive[$dir]=""
             while IFS= read -r pattern; do
+              [ -n "$pattern" ] || continue
               recursive[$dir]=1
               while IFS= read -r ws; do
+                [ -n "$ws" ] || continue
                 allowed+=("${prefix}${ws}")
               done < <(cd "$dir" && compgen -G "$pattern/package.json" || true)
             done < <(cd "$dir" && jq -r '(.workspaces // []) | if type == "object" then (.packages // []) else . end | .[]' package.json)
-            (cd "$dir" && bun install --frozen-lockfile && bun update ${recursive[$dir]:+--recursive})
+            (cd "$dir" && bun install --frozen-lockfile --ignore-scripts && bun update "${update_args[@]}" ${recursive[$dir]:+--recursive})
           done
 
           changed_files=()
           while IFS= read -r line; do
+            [ -n "$line" ] || continue
             path="${line:3}"
             ok=false
             for a in "${allowed[@]}"; do
-              if [ "$path" = "$a" ]; then ok=true; fi
+              if [ "$path" = "$a" ]; then ok=true; break; fi
             done
             if ! $ok; then
               echo "::error::bun update изменил путь вне package.json и bun.lock: $path"
@@ -95,7 +132,7 @@ jobs:
           done < <(git status --porcelain --untracked-files=all)
 
           if [ "${#changed_files[@]}" -eq 0 ]; then
-            echo "Обновлений нет: всё актуально в пределах диапазонов и порога возраста."
+            echo "Обновлений нет: всё актуально в пределах диапазонов (minimumReleaseAge=${MIN_RELEASE_AGE}s)."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -103,14 +140,14 @@ jobs:
           printf '%s\n' "${changed_files[@]}" > "$out/files.txt"
           for f in "${changed_files[@]}"; do
             mkdir -p "$out/files/$(dirname "$f")"
-            cp "$f" "$out/files/$f"
+            cp -P -- "$f" "$out/files/$f"
           done
 
           today="$(date -u +%F)"
           : > "$out/changes.txt"
           : > "$out/audit.txt"
           {
-            echo "Автообновление зависимостей от $today (workflow \`deps-auto-update\`): \`bun update\` в пределах диапазонов \`package.json\`, только minor и patch, прямые и транзитивные пакеты, свежие версии сразу после выхода. Пока PR открыт, ветка пересобирается от последнего commit \`AgentHits-Dev\` после каждого push в неё и каждый день в 03:00 UTC."
+            echo "Автообновление зависимостей от $today (workflow \`deps-auto-update\`): \`bun update --ignore-scripts\` в пределах диапазонов \`package.json\`, только minor и patch, прямые и транзитивные пакеты; cooldown \`minimumReleaseAge=${MIN_RELEASE_AGE}\` с${excludes_csv:+ (\`minimumReleaseAgeExcludes=${excludes_csv}\`)}. Пока PR открыт, ветка пересобирается от последнего commit \`AgentHits-Dev\` после каждого push в неё и каждый день в 04:10 UTC."
             echo
             for dir in $DEP_DIRS; do
               prefix=""
@@ -126,6 +163,7 @@ jobs:
                 }' > "$out/changes.tsv"
               audit="$(cd "$dir" && bun audit 2>&1 || true)"
               audit_line="$(printf '%s\n' "$audit" | grep -E 'vulnerabilit' | tail -n 1 || true)"
+              trusted="$(bun -e 'const p = JSON.parse(await Bun.file(process.argv[1]).text()); const t = Array.isArray(p.trustedDependencies) ? p.trustedDependencies : []; console.log(t.length ? t.join(", ") : "нет");' "${prefix}package.json")"
               echo "${prefix:-./}: ${audit_line:-bun audit без итога}" >> "$out/audit.txt"
               awk -F'\t' -v p="$prefix" '{ printf "%s%s %s -> %s\n", p, $1, ($2 == "" ? "(новый)" : $2), ($3 == "" ? "(удалён)" : $3) }' "$out/changes.tsv" >> "$out/changes.txt"
 
@@ -134,6 +172,8 @@ jobs:
               echo "| Пакет | Было | Стало |"
               echo "|---|---|---|"
               awk -F'\t' '{ printf "| `%s` | %s | %s |\n", $1, ($2 == "" ? "—" : $2), ($3 == "" ? "удалён" : $3) }' "$out/changes.tsv"
+              echo
+              echo "**trustedDependencies:** ${trusted}"
               echo
               echo "**bun audit:** ${audit_line:-нет итоговой строки, см. ниже}"
               echo
@@ -147,7 +187,7 @@ jobs:
               echo "<details><summary>bun outdated: колонка Latest выше Update - это major, их workflow не берёт</summary>"
               echo
               echo '```'
-              (cd "$dir" && bun outdated ${recursive[$dir]:+--recursive} 2>&1 || true) | tail -n 120
+              (cd "$dir" && bun outdated ${recursive[$dir]:+--recursive} 2>&1 || true) | tail -n 80
               echo '```'
               echo "</details>"
               echo
@@ -156,27 +196,9 @@ jobs:
             echo "Перед merge: зелёные прогоны \`$CI_WORKFLOWS\` с событием \`workflow_dispatch\` на голове PR (workflow запускает их сам: push от GITHUB_TOKEN событие pull_request не создаёт). Commit в эту ветку останавливает пересборку. Major - отдельными PR."
           } > "$out/report.md"
 
-          total="$(wc -l < "$out/changes.txt" | tr -d ' ')"
-          {
-            echo "зависимости: автообновление библиотек ($today)"
-            echo
-            echo "Что сделано: bun update в пределах диапазонов package.json (workflow"
-            echo "deps-auto-update), свежие версии сразу после выхода. Изменено пакетов: $total."
-            echo
-            head -n 80 "$out/changes.txt"
-            if [ "$total" -gt 80 ]; then echo "... и ещё $((total - 80)), полный список в PR."; fi
-            echo
-            echo "Зачем: ежедневное автообновление зависимостей (решение владельца"
-            echo "2026-10-27), включая транзитивные пакеты, которые Dependabot не двигает."
-            echo
-            echo "Проверки: bun install --frozen-lockfile до обновления; bun audit:"
-            cat "$out/audit.txt"
-            echo "Проверки ветки запускаются отдельно ($CI_WORKFLOWS, workflow_dispatch)."
-          } > "$out/commit.txt"
-
           cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
           echo "changed=true" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: steps.update.outputs.changed == 'true'
         with:
           name: deps-auto-update
@@ -185,25 +207,25 @@ jobs:
 
   publish:
     needs: update
-    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
       pull-requests: write
       actions: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         if: needs.update.outputs.changed == 'true'
         with:
           name: deps-auto-update
           path: ${{ runner.temp }}/deps
       - name: Открытый PR ветки
         id: pr
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const { data } = await github.rest.pulls.list({
@@ -217,55 +239,483 @@ jobs:
         id: branch
         env:
           CHANGED: ${{ needs.update.outputs.changed }}
+          BASE_SHA: ${{ github.sha }}
           PR: ${{ steps.pr.outputs.number }}
+          MIN_RELEASE_AGE: ${{ inputs.min_release_age != '' && inputs.min_release_age || '259200' }}
+          CVE_PKG: ${{ inputs.cve_pkg || '' }}
         run: |
           set -euo pipefail
+          if ! [[ "$MIN_RELEASE_AGE" =~ ^[0-9]+$ ]]; then
+            echo "::error::Некорректный min_release_age в publish: '$MIN_RELEASE_AGE'"
+            exit 1
+          fi
+          cve_pkg_clean=""
+          if [ -n "${CVE_PKG//[,[:space:]]/}" ]; then
+            cleaned="$(printf '%s' "$CVE_PKG" | tr ',[:space:]' '\n' | sed '/^$/d')"
+            while IFS= read -r pkg; do
+              if ! [[ "$pkg" =~ ^(@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+$ ]]; then
+                echo "::error::Некорректное имя пакета в cve_pkg в publish: '$pkg'"
+                exit 1
+              fi
+              cve_pkg_clean="${cve_pkg_clean:+${cve_pkg_clean},}${pkg}"
+            done <<< "$cleaned"
+          fi
+          CVE_PKG="$cve_pkg_clean"
+
+          git fetch -q origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
+
           remote=false
           if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
             git fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
             remote=true
           fi
           if [ -n "$PR" ] && $remote; then
-            foreign="$(git log --format='%h %ae' "origin/$BASE..origin/$BRANCH" | grep -v -F " $BOT_EMAIL" || true)"
+            foreign="$(git log --format='%h %ae%n%h %ce' "origin/$BASE..origin/$BRANCH" | awk -v bot="$BOT_EMAIL" 'NF && $2 != bot')"
             if [ -n "$foreign" ]; then
               echo "::notice::В ветке $BRANCH открытого PR #$PR есть чужие commit, пересборка остановлена до merge или закрытия PR: $(echo "$foreign" | tr '\n' ' ')"
               echo "action=skip" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
+
+          # Вычисляем allowed заново в publish из доверенного origin/$BASE, без симлинков.
+          mapfile -t allowed < <(python3 -I - "$BASE" "$DEP_DIRS" <<'PY'
+          import json
+          import re
+          import subprocess
+          import sys
+
+          base = sys.argv[1]
+          dep_dirs = sys.argv[2].split()
+
+          ls_res = subprocess.run(
+              ["git", "ls-tree", "-r", "-z", f"origin/{base}"],
+              check=True,
+              capture_output=True,
+          )
+          symlinks = set()
+          tree_paths = []
+          for entry in ls_res.stdout.split(b"\x00"):
+              if not entry:
+                  continue
+              meta, path_b = entry.split(b"\t", 1)
+              mode = meta.split(b" ", 1)[0].decode("ascii")
+              path = path_b.decode("utf-8")
+              tree_paths.append(path)
+              if mode == "120000":
+                  symlinks.add(path)
+
+          def glob_to_regex(pat):
+              out = ["^"]
+              for ch in pat:
+                  if ch == "*":
+                      out.append("[^/]*")
+                  elif ch == "?":
+                      out.append("[^/]")
+                  else:
+                      out.append(re.escape(ch))
+              out.append("$")
+              return re.compile("".join(out))
+
+          allowed = []
+          seen = set()
+          for d in dep_dirs:
+              prefix = "" if d == "." else f"{d}/"
+              for fn in (f"{prefix}package.json", f"{prefix}bun.lock"):
+                  if fn in symlinks:
+                      raise SystemExit(f"::error::В origin/{base} обнаружен симлинк: {fn}")
+                  if fn not in seen:
+                      seen.add(fn)
+                      allowed.append(fn)
+              pkg_res = subprocess.run(
+                  ["git", "show", f"origin/{base}:{prefix}package.json"],
+                  check=True,
+                  capture_output=True,
+              )
+              if b"\x00" in pkg_res.stdout:
+                  raise SystemExit(f"::error::Нулевой байт в origin/{base}:{prefix}package.json")
+              pkg_data = json.loads(pkg_res.stdout.decode("utf-8"))
+              ws = pkg_data.get("workspaces") or []
+              if isinstance(ws, dict):
+                  ws = ws.get("packages") or []
+              for pat in ws:
+                  pat = pat.rstrip("/")
+                  rx = glob_to_regex(f"{prefix}{pat}/package.json")
+                  for p in sorted(tree_paths):
+                      if rx.match(p):
+                          if p in symlinks:
+                              raise SystemExit(f"::error::В origin/{base} обнаружен симлинк workspace: {p}")
+                          if p not in seen:
+                              seen.add(p)
+                              allowed.append(p)
+
+          for a in allowed:
+              print(a)
+          PY
+          )
+
+          git cat-file -e "${BASE_SHA}^{commit}"
+          origin_base_sha="$(git rev-parse "origin/$BASE")"
+          if [ "$BASE_SHA" != "$origin_base_sha" ]; then
+            changed_on_base="$(git diff --name-only "$BASE_SHA..origin/$BASE")"
+            stale_files=false
+            while IFS= read -r p; do
+              [ -n "$p" ] || continue
+              for a in "${allowed[@]}"; do
+                if [ "$p" = "$a" ]; then stale_files=true; break 2; fi
+              done
+            done <<< "$changed_on_base"
+            if $stale_files; then
+              echo "::notice::Ветка $BASE изменилась за время выполнения update ($BASE_SHA -> $origin_base_sha) и затронула файлы зависимостей; требуется повторный запуск."
+              echo "action=redispatch" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
           if [ "$CHANGED" != "true" ]; then
             echo "action=close" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
           git config user.name "github-actions[bot]"
           git config user.email "$BOT_EMAIL"
-          git checkout -q -B "$BRANCH"
-          cp -R "$RUNNER_TEMP/deps/files/." .
-          mapfile -t files < "$RUNNER_TEMP/deps/files.txt"
+          git checkout -q -B "$BRANCH" "origin/$BASE"
+
+          # Валидация артефакта из untrusted job update: строго allowlist package.json/bun.lock из DEP_DIRS, без /, .. и симлинков.
+          if [ ! -f "$RUNNER_TEMP/deps/files.txt" ] || [ -L "$RUNNER_TEMP/deps/files.txt" ]; then
+            echo "::error::Отсутствует или является симлинком артефакт files.txt"
+            exit 1
+          fi
+          mapfile -t raw_files < "$RUNNER_TEMP/deps/files.txt"
+          if [ "${#raw_files[@]}" -eq 0 ]; then
+            echo "::error::Пустой список files.txt при CHANGED=true"
+            exit 1
+          fi
+          files=()
+          pkg_files=()
+          lock_files=()
+          for f in "${raw_files[@]}"; do
+            if [ -z "$f" ] || [[ "$f" = /* ]] || [[ "$f" == *".."* ]]; then
+              echo "::error::Запрещённый путь в files.txt: $f"
+              exit 1
+            fi
+            ok=false
+            for a in "${allowed[@]}"; do
+              if [ "$f" = "$a" ]; then ok=true; break; fi
+            done
+            if ! $ok; then
+              echo "::error::Путь вне allowlist (package.json/bun.lock из DEP_DIRS): $f"
+              exit 1
+            fi
+            src="$RUNNER_TEMP/deps/files/$f"
+            if [ ! -f "$src" ] || [ -L "$src" ]; then
+              echo "::error::Файл артефакта отсутствует или является симлинком: $f"
+              exit 1
+            fi
+            cur_src="$RUNNER_TEMP/deps/files"
+            cur_dst="."
+            IFS='/' read -r -a parts <<< "$f"
+            for part in "${parts[@]}"; do
+              cur_src="$cur_src/$part"
+              cur_dst="$cur_dst/$part"
+              if [ -L "$cur_src" ]; then
+                echo "::error::Симлинк в компоненте пути артефакта: $f"
+                exit 1
+              fi
+              if [ -L "$cur_dst" ]; then
+                echo "::error::Симлинк в компоненте целевого пути: $f"
+                exit 1
+              fi
+            done
+            cp -P -- "$src" "$f"
+            files+=("$f")
+            if [ "$f" = "package.json" ] || [[ "$f" == */package.json ]]; then
+              pkg_files+=("$f")
+            elif [ "$f" = "bun.lock" ] || [[ "$f" == */bun.lock ]]; then
+              lock_files+=("$f")
+            fi
+          done
+
+          # Zero-trust валидатор каждого затронутого package.json против origin/$BASE.
+          if [ "${#pkg_files[@]}" -gt 0 ]; then
+            python3 -I - "$BASE" "${pkg_files[@]}" <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          base = sys.argv[1]
+          pkg_files = sys.argv[2:]
+          dep_sections = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+          version_part = r"[0-9]+(?:\.(?:[0-9]+|[xX*])(?:\.(?:[0-9]+|[xX*]))?)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?"
+          comparator = rf"(?:~|\^|>=|<=|>|<|=)?{version_part}"
+          range_clause = rf"{comparator}(?:(?:\s+-\s+|\s+){comparator})*"
+          SEMVER_RANGE_RE = re.compile(rf"^{range_clause}(?:\s+\|\|\s+{range_clause})*$")
+          forbidden_tokens = ("://", "git+", "file:", "link:", "github:", "workspace:", "npm:", ":", "/", "\\", "..")
+
+          def reject_duplicate_keys(pairs):
+              obj = {}
+              for k, v in pairs:
+                  if k in obj:
+                      raise ValueError(f"Дублирующийся ключ в JSON: {k}")
+                  obj[k] = v
+              return obj
+
+          for path in pkg_files:
+              if os.path.islink(path):
+                  raise SystemExit(f"::error::package.json является симлинком: {path}")
+              res = subprocess.run(
+                  ["git", "show", f"origin/{base}:{path}"],
+                  check=False,
+                  capture_output=True,
+              )
+              if res.returncode != 0:
+                  raise SystemExit(f"::error::Не удалось прочитать origin/{base}:{path}: {res.stderr.decode('utf-8', 'replace').strip()}")
+              if b"\x00" in res.stdout:
+                  raise SystemExit(f"::error::Нулевой байт в origin/{base}:{path}")
+              old_raw = res.stdout.decode("utf-8")
+              with open(path, "rb") as fh:
+                  new_bytes = fh.read()
+              if b"\x00" in new_bytes:
+                  raise SystemExit(f"::error::Нулевой байт в {path}")
+              new_raw = new_bytes.decode("utf-8")
+              old = json.loads(old_raw, object_pairs_hook=reject_duplicate_keys)
+              new = json.loads(new_raw, object_pairs_hook=reject_duplicate_keys)
+              if not isinstance(old, dict) or not isinstance(new, dict):
+                  raise SystemExit(f"::error::{path}: корень JSON должен быть объектом")
+
+              all_keys = set(old.keys()) | set(new.keys())
+              for k in sorted(all_keys):
+                  if k in dep_sections:
+                      continue
+                  if k not in old or k not in new or old[k] != new[k]:
+                      raise SystemExit(f"::error::{path}: запрещено менять top-level поле '{k}'")
+
+              for sec in dep_sections:
+                  if sec not in old and sec not in new:
+                      continue
+                  if sec not in old or sec not in new:
+                      raise SystemExit(f"::error::{path}: запрещено добавлять или удалять секцию '{sec}'")
+                  old_sec = old[sec]
+                  new_sec = new[sec]
+                  if not isinstance(old_sec, dict) or not isinstance(new_sec, dict):
+                      raise SystemExit(f"::error::{path}: секция '{sec}' должна быть объектом в обоих вариантах")
+                  if set(old_sec.keys()) != set(new_sec.keys()):
+                      added = sorted(set(new_sec.keys()) - set(old_sec.keys()))
+                      removed = sorted(set(old_sec.keys()) - set(new_sec.keys()))
+                      raise SystemExit(f"::error::{path}: запрещено менять состав ключей в '{sec}' (added={added}, removed={removed})")
+                  for pkg, new_val in new_sec.items():
+                      if old_sec.get(pkg) == new_val:
+                          continue
+                      if not isinstance(new_val, str):
+                          raise SystemExit(f"::error::{path}: версия {sec}.{pkg} должна быть строкой")
+                      if len(new_val) > 64:
+                          raise SystemExit(f"::error::{path}: значение {sec}.{pkg} длиннее 64 символов")
+                      for tok in forbidden_tokens:
+                          if tok in new_val:
+                              raise SystemExit(f"::error::{path}: запрещённая подстрока '{tok}' в {sec}.{pkg}={new_val!r}")
+                      if not SEMVER_RANGE_RE.fullmatch(new_val):
+                          raise SystemExit(f"::error::{path}: значение {sec}.{pkg}={new_val!r} не является строгим semver-диапазоном")
+          PY
+          fi
+
+          # Zero-trust проверка каждого изменённого bun.lock на NUL-байты и инъекцию внешних/локальных URL.
+          if [ "${#lock_files[@]}" -gt 0 ]; then
+            python3 -I - "$BASE" "${lock_files[@]}" <<'PY'
+          import os
+          import re
+          import subprocess
+          import sys
+
+          base = sys.argv[1]
+          lock_files = sys.argv[2:]
+          ref_re = re.compile(
+              r"(?i)(?:https?://|git\+|git://|ssh://|file:|github:|bitbucket:|gitlab:)[^\s\"'`<>()\[\]{},;]*"
+          )
+
+          for path in lock_files:
+              if os.path.islink(path):
+                  raise SystemExit(f"::error::bun.lock является симлинком: {path}")
+              with open(path, "rb") as fh:
+                  new_bytes = fh.read()
+              if b"\x00" in new_bytes:
+                  raise SystemExit(f"::error::{path}: содержит нулевой байт (\\x00)")
+              old_res = subprocess.run(
+                  ["git", "show", f"origin/{base}:{path}"],
+                  check=False,
+                  capture_output=True,
+              )
+              if old_res.returncode == 0:
+                  if b"\x00" in old_res.stdout:
+                      raise SystemExit(f"::error::origin/{base}:{path}: содержит нулевой байт")
+                  old_text = old_res.stdout.decode("utf-8", "replace")
+                  allowed_refs = set(m.group(0) for m in ref_re.finditer(old_text))
+              else:
+                  allowed_refs = set()
+
+              diff_res = subprocess.run(
+                  ["git", "diff", "-U0", "--no-color", f"origin/{base}", "--", path],
+                  check=False,
+                  capture_output=True,
+                  text=True,
+              )
+              if diff_res.returncode != 0:
+                  raise SystemExit(f"::error::git diff не удался для {path}: {diff_res.stderr.strip()}")
+              for line in diff_res.stdout.splitlines():
+                  if not line.startswith("+") or line.startswith("+++"):
+                      continue
+                  content = line[1:]
+                  for m in ref_re.finditer(content):
+                      found = m.group(0)
+                      if found not in allowed_refs:
+                          raise SystemExit(f"::error::{path}: запрещена новая ссылка в bun.lock: {found!r}")
+          PY
+          fi
+
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            path="${line:3}"
+            ok=false
+            for a in "${files[@]}"; do
+              if [ "$path" = "$a" ]; then ok=true; break; fi
+            done
+            if ! $ok; then
+              echo "::error::Неожиданный изменённый файл в publish: $path"
+              exit 1
+            fi
+          done < <(git status --porcelain --untracked-files=all)
+
           git add -- "${files[@]}"
-          git commit -q -F "$RUNNER_TEMP/deps/commit.txt"
+
+          # Пересобираем commit.txt локально в доверенном job publish (не доверяем тексту из untrusted update).
+          today="$(date -u +%F)"
+          changes_file="$RUNNER_TEMP/publish-changes.txt"
+          : > "$changes_file"
+          for dir in $DEP_DIRS; do
+            prefix=""
+            [ "$dir" = "." ] || prefix="$dir/"
+            git diff --cached -U0 -- "${prefix}bun.lock" | perl -ne '
+              if (/^([-+])    "([^"]+)": \["(?:@[^\/"]+\/)?[^@"]+@([^"]+)"/) { $v{$2}{$1} = $3 }
+              END {
+                for (sort keys %v) {
+                  my ($o, $n) = ($v{$_}{"-"} // "", $v{$_}{"+"} // "");
+                  print join("\t", $_, $o, $n), "\n" if $o ne $n;
+                }
+              }' | awk -F'\t' -v p="$prefix" '{ printf "%s%s %s -> %s\n", p, $1, ($2 == "" ? "(новый)" : $2), ($3 == "" ? "(удалён)" : $3) }' >> "$changes_file"
+          done
+          total="$(wc -l < "$changes_file" | tr -d ' ')"
+          commit_msg="$RUNNER_TEMP/publish-commit.txt"
+          {
+            echo "зависимости: автообновление библиотек ($today)"
+            echo
+            echo "Что:"
+            echo "- bun update --ignore-scripts в пределах диапазонов package.json (workflow deps-auto-update, minimumReleaseAge=${MIN_RELEASE_AGE}s${CVE_PKG:+, excludes=${CVE_PKG}})."
+            echo "- Изменено пакетов: $total."
+            head -n 80 "$changes_file" | sed 's/^/- /'
+            if [ "$total" -gt 80 ]; then echo "- ... и ещё $((total - 80)), полный список в PR."; fi
+            echo
+            echo "Зачем:"
+            echo "- Ежедневное автообновление зависимостей Bun с cooldown и проверкой lockfile (workflow deps-auto-update)."
+            echo
+            echo "Проверки:"
+            echo "- Валидация allowlist путей (package.json, bun.lock) и отсутствие симлинков в publish."
+            echo "- Проверки ветки ($CI_WORKFLOWS) запускаются отдельно через workflow_dispatch."
+          } > "$commit_msg"
+          git commit -q -F "$commit_msg"
+
+          wf_diff="$(git diff --name-only "origin/$BASE" HEAD -- .github/workflows/)"
+          if [ -n "$wf_diff" ]; then
+            echo "::error::В диффе к origin/$BASE затронуты файлы .github/workflows/: $wf_diff"
+            exit 1
+          fi
+
           if $remote && [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "origin/$BRANCH^{tree}")" ]; then
             echo "Ветка $BRANCH уже содержит то же дерево: push не нужен."
             echo "action=same" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git push -q --force origin "HEAD:refs/heads/$BRANCH"
+          push_err_file="$RUNNER_TEMP/push.err"
+          if ! git push -q --force origin "HEAD:refs/heads/$BRANCH" 2>"$push_err_file"; then
+            push_err="$(cat "$push_err_file")"
+            if printf '%s' "$push_err" | grep -qiE 'without workflows permission|refusing to allow'; then
+              echo "::error::git push в $BRANCH отклонён из-за ограничений права workflows у GITHUB_TOKEN: $push_err"
+              echo "action=workflow_perm" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            printf '%s\n' "$push_err" >&2
+            exit 1
+          fi
+          pushed_sha="$(git rev-parse HEAD)"
+          echo "pushed_sha=$pushed_sha" >> "$GITHUB_OUTPUT"
           echo "action=pushed" >> "$GITHUB_OUTPUT"
       - name: PR и проверки ветки
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           ACTION: ${{ steps.branch.outputs.action }}
+          PUSHED_SHA: ${{ steps.branch.outputs.pushed_sha }}
           PR: ${{ steps.pr.outputs.number }}
+          MIN_RELEASE_AGE: ${{ inputs.min_release_age != '' && inputs.min_release_age || '259200' }}
+          CVE_PKG: ${{ inputs.cve_pkg || '' }}
+          IS_REDISPATCH: ${{ inputs.redispatch == true && 'true' || 'false' }}
         with:
           script: |
             const fs = require('node:fs');
-            const { ACTION: action, BRANCH: branch, BASE: base, CI_WORKFLOWS: ciWorkflows, RUNNER_TEMP: tmp } = process.env;
+            const { setTimeout } = require('node:timers/promises');
+            const {
+              ACTION: action,
+              BRANCH: branch,
+              BASE: base,
+              CI_WORKFLOWS: ciWorkflows,
+              PUSHED_SHA: pushedSha,
+              RUNNER_TEMP: tmp,
+              MIN_RELEASE_AGE: minReleaseAge,
+              CVE_PKG: cvePkg,
+              IS_REDISPATCH: isRedispatch,
+            } = process.env;
             const repo = context.repo;
             let pr = process.env.PR ? Number(process.env.PR) : null;
             const summary = (text) => core.summary.addRaw(`${text}\n`).write();
 
             if (action === 'skip') {
               await summary(`PR #${pr}: в ветке чужие commit, пересборка пропущена.`);
+              return;
+            }
+            if (action === 'workflow_perm') {
+              const msg = `Push в ветку ${branch} отклонён: у GITHUB_TOKEN отсутствует право workflows (или сервер запретил изменение .github/workflows/).`;
+              await summary(msg);
+              core.setFailed(msg);
+              return;
+            }
+            if (action === 'redispatch') {
+              if (isRedispatch === 'true') {
+                await summary(`Ветка ${base} снова изменилась во время повторного прогона; отложено до следующего запуска во избежание зацикливания.`);
+                return;
+              }
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                ...repo,
+                workflow_id: 'deps-auto-update.yml',
+                per_page: 20,
+              });
+              const activeStatuses = new Set(['queued', 'in_progress', 'waiting', 'requested', 'pending']);
+              const already = (data.workflow_runs || []).some(
+                (r) => r.id !== context.runId && activeStatuses.has(r.status) && r.head_branch === base
+              );
+              if (already) {
+                await summary(`Ветка ${base} обновилась за время update, но уже есть активный/ожидающий запуск deps-auto-update.yml.`);
+                return;
+              }
+              await github.rest.actions.createWorkflowDispatch({
+                ...repo,
+                workflow_id: 'deps-auto-update.yml',
+                ref: base,
+                inputs: {
+                  min_release_age: minReleaseAge || '259200',
+                  cve_pkg: cvePkg || '',
+                  redispatch: 'true',
+                },
+              });
+              await summary(`Ветка ${base} обновила файлы зависимостей за время работы update; выполнен повторный запуск deps-auto-update.yml на ${base}.`);
               return;
             }
             if (action === 'close') {
@@ -283,7 +733,12 @@ jobs:
             }
 
             const title = 'зависимости: автообновление библиотек';
-            let body = fs.readFileSync(`${tmp}/deps/report.md`, 'utf8');
+            const reportPath = `${tmp}/deps/report.md`;
+            const reportStat = fs.lstatSync(reportPath);
+            if (!reportStat.isFile() || reportStat.isSymbolicLink()) {
+              throw new Error(`Некорректный артефакт report.md: ${reportPath}`);
+            }
+            let body = fs.readFileSync(reportPath, 'utf8');
             if (body.length > 60000) body = `${body.slice(0, 60000)}\n\n… отчёт обрезан, полный - в summary прогона.`;
             if (pr) {
               await github.rest.pulls.update({ ...repo, pull_number: pr, title, body });
@@ -292,10 +747,29 @@ jobs:
                 ({ data: { number: pr } } = await github.rest.pulls.create({ ...repo, head: branch, base, title, body }));
               } catch (error) {
                 core.setFailed(`Ветка ${branch} обновлена, но PR не создан (${error.status}: ${error.message}). Разрешите Actions создавать PR: Settings репозитория (и организации, если она есть) → Actions → General → Workflow permissions → «Allow GitHub Actions to create and approve pull requests».`);
+                return;
               }
             }
             if (action === 'pushed') {
-              for (const workflow of ciWorkflows.split(' ')) {
+              if (pushedSha) {
+                let propagated = false;
+                for (let attempt = 0; attempt < 4; attempt += 1) {
+                  await setTimeout(attempt === 0 ? 3000 : 2000);
+                  try {
+                    const { data: refData } = await github.rest.git.getRef({ ...repo, ref: `heads/${branch}` });
+                    if (refData && refData.object && refData.object.sha === pushedSha) {
+                      propagated = true;
+                      break;
+                    }
+                  } catch (refErr) {
+                    core.info(`Ожидание ref ${branch}: ${refErr.message}`);
+                  }
+                }
+                if (!propagated) {
+                  throw new Error(`ref ${branch} не подтвердил SHA ${pushedSha} за 9s после git push.`);
+                }
+              }
+              for (const workflow of ciWorkflows.split(/\s+/).filter(Boolean)) {
                 await github.rest.actions.createWorkflowDispatch({ ...repo, workflow_id: workflow, ref: branch });
               }
             }
