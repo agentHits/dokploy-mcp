@@ -68,7 +68,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: "1.4.4"
+          bun-version-file: package.json
       - name: bun update, проверка scope и отчёт
         id: update
         env:
@@ -201,7 +201,7 @@ jobs:
 
           cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
           echo "changed=true" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.update.outputs.changed == 'true'
         with:
           name: deps-auto-update
@@ -221,7 +221,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: needs.update.outputs.changed == 'true'
         with:
           name: deps-auto-update
@@ -523,124 +523,11 @@ jobs:
           PY
           fi
 
-          # Zero-trust проверка каждого изменённого bun.lock на NUL-байты, инъекцию внешних/локальных URL и запрет SemVer 2.0.0 downgrade.
+          # Zero-trust проверка каждого изменённого bun.lock (скрипт .github/scripts/validate-bun-lock.py
+          # берётся из доверенного checkout origin/$BASE и не входит в allowlist артефакта):
+          # симлинки, NUL-байты, инъекция внешних/локальных URL и 3-слойный запрет SemVer 2.0.0 downgrade.
           if [ "${#lock_files[@]}" -gt 0 ]; then
-            python3 -I - "$BASE" "${lock_files[@]}" <<'PY'
-          import os
-          import re
-          import subprocess
-          import sys
-
-          base = sys.argv[1]
-          lock_files = sys.argv[2:]
-          ref_re = re.compile(
-              r"(?i)(?:https?://|git\+|git://|ssh://|file:|github:|bitbucket:|gitlab:)[^\s\"'`<>()\[\]{},;]*"
-          )
-          pkg_entry_re = re.compile(r'^    "([^"]+)": \["(?:@[^/"]+/)?[^@"]+@([^"]+)"')
-          semver_re = re.compile(
-              r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
-          )
-
-          def parse_semver(ver):
-              m = semver_re.fullmatch(ver)
-              if not m:
-                  return None
-              major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
-              pre = m.group(4)
-              if pre is None:
-                  return (major, minor, patch, 1, ())
-              pre_tuple = tuple(
-                  (0, int(p)) if p.isdigit() else (1, p) for p in pre.split(".")
-              )
-              return (major, minor, patch, 0, pre_tuple)
-
-          def parse_lock_packages(text):
-              pkgs = {}
-              in_packages = False
-              found_packages = False
-              for line in text.splitlines():
-                  if not in_packages:
-                      if re.match(r'^  "packages": \{\s*\},?\s*$', line):
-                          found_packages = True
-                          break
-                      if re.match(r'^  "packages": \{\s*$', line):
-                          in_packages = True
-                          found_packages = True
-                      continue
-                  if re.match(r'^  \},?\s*$', line):
-                      break
-                  m = pkg_entry_re.match(line)
-                  if m:
-                      key, ver = m.group(1), m.group(2)
-                      if key in pkgs:
-                          raise ValueError(f"duplicate key in bun.lock packages: {key}")
-                      pkgs[key] = ver
-              return pkgs, found_packages
-
-          for path in lock_files:
-              if os.path.islink(path):
-                  raise SystemExit(f"::error::bun.lock является симлинком: {path}")
-              with open(path, "rb") as fh:
-                  new_bytes = fh.read()
-              if b"\x00" in new_bytes:
-                  raise SystemExit(f"::error::{path}: содержит нулевой байт (\\x00)")
-              new_text = new_bytes.decode("utf-8", "replace")
-              old_res = subprocess.run(
-                  ["git", "show", f"origin/{base}:{path}"],
-                  check=False,
-                  capture_output=True,
-              )
-              if old_res.returncode == 0:
-                  if b"\x00" in old_res.stdout:
-                      raise SystemExit(f"::error::origin/{base}:{path}: содержит нулевой байт")
-                  old_text = old_res.stdout.decode("utf-8", "replace")
-                  allowed_refs = set(m.group(0) for m in ref_re.finditer(old_text))
-              else:
-                  old_text = None
-                  allowed_refs = set()
-
-              diff_res = subprocess.run(
-                  ["git", "diff", "-U0", "--no-color", f"origin/{base}", "--", path],
-                  check=False,
-                  capture_output=True,
-                  text=True,
-              )
-              if diff_res.returncode != 0:
-                  raise SystemExit(f"::error::git diff не удался для {path}: {diff_res.stderr.strip()}")
-              for line in diff_res.stdout.splitlines():
-                  if not line.startswith("+") or line.startswith("+++"):
-                      continue
-                  content = line[1:]
-                  for m in ref_re.finditer(content):
-                      found = m.group(0)
-                      if found not in allowed_refs:
-                          raise SystemExit(f"::error::{path}: запрещена новая ссылка в bun.lock: {found!r}")
-
-              if old_text is not None:
-                  try:
-                      old_pkgs, _ = parse_lock_packages(old_text)
-                      new_pkgs, new_found = parse_lock_packages(new_text)
-                  except ValueError as err:
-                      raise SystemExit(f"::error::{path}: {err}")
-                  if old_pkgs and not new_found:
-                      raise SystemExit(f"::error::{path}: missing \"packages\" section in bun.lock")
-                  downgrades = []
-                  for key in sorted(old_pkgs.keys() & new_pkgs.keys()):
-                      old_ver = old_pkgs[key]
-                      new_ver = new_pkgs[key]
-                      if old_ver == new_ver:
-                          continue
-                      old_sv = parse_semver(old_ver)
-                      new_sv = parse_semver(new_ver)
-                      if old_sv is None or new_sv is None:
-                          continue
-                      if new_sv < old_sv:
-                          downgrades.append(
-                              f"::error::{path}: downgrade forbidden for {key} ({old_ver} -> {new_ver})"
-                          )
-                  if downgrades:
-                      raise SystemExit("\n".join(downgrades))
-          PY
+            python3 -I .github/scripts/validate-bun-lock.py "$BASE" "${lock_files[@]}"
           fi
 
           while IFS= read -r line; do
