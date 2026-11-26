@@ -312,11 +312,34 @@ def validate_packages_transition(
             new_buckets[(entry.pkg_name, compat_line(entry.sv))].append(entry)
             new_by_pkg[entry.pkg_name].append(entry)
 
-    # Layer 1: Per-(pkg_name, compat_line) top-aligned multiset dominance.
+    # Layer 1: Per-(pkg_name, compat_line) top-aligned multiset dominance on changed entries.
+    # Cancel pure spectator keys (identical key, pkg_name, SemVer, and integrity in both
+    # base and candidate) so deleting a higher-version nested copy while an untouched
+    # lower-version copy remains (e.g. root tslib@2.8.1 when nested */tslib@2.9.1 copies
+    # vanish with removed parent packages) does not false-positive.
+    spectator_keys = {
+        key
+        for key in (old_pkgs.keys() & new_pkgs.keys())
+        if not old_pkgs[key].is_bundled
+        and not new_pkgs[key].is_bundled
+        and old_pkgs[key].sv is not None
+        and new_pkgs[key].sv is not None
+        and old_pkgs[key].pkg_name == new_pkgs[key].pkg_name
+        and old_pkgs[key].sv == new_pkgs[key].sv
+        and old_pkgs[key].integrity == new_pkgs[key].integrity
+    }
     for bucket in sorted(old_buckets.keys() & new_buckets.keys()):
         pkg_name, cline = bucket
-        old_svs = sorted(e.sv for e in old_buckets[bucket] if e.sv is not None)
-        new_svs = sorted(e.sv for e in new_buckets[bucket] if e.sv is not None)
+        old_svs = sorted(
+            e.sv
+            for e in old_buckets[bucket]
+            if e.sv is not None and e.key not in spectator_keys
+        )
+        new_svs = sorted(
+            e.sv
+            for e in new_buckets[bucket]
+            if e.sv is not None and e.key not in spectator_keys
+        )
         k = min(len(old_svs), len(new_svs))
         for i in range(k):
             if new_svs[-k + i] < old_svs[-k + i]:
