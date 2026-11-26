@@ -4,7 +4,7 @@
 
 Dokploy MCP Server exposes **all Dokploy API endpoints** as tools consumable via the Model Context Protocol (MCP). It allows MCP-compatible clients (e.g., AI models, other applications) to interact with your Dokploy server programmatically.
 
-With **510 tools** across **49 categories**, this server provides complete coverage of the Dokploy API — from project and application management to databases, notifications, SSO, Docker, backups, and more.
+With **511 tools** across **49 categories**, this server provides complete coverage of the Dokploy API — from project and application management to databases, notifications, SSO, Docker, backups, and more.
 
 ## Getting Started
 
@@ -400,9 +400,9 @@ Request bodies are limited to 4 MB, with or without `Content-Length`; a larger b
 
 `docker-compose.yml` publishes the port on `127.0.0.1` (`EXTERNAL_HOST`). Before you publish it on other interfaces, set `MCP_AUTH_TOKEN` and put TLS in front of the server, so the token does not travel in plain text.
 
-## Available Tools (510)
+## Available Tools (511)
 
-This MCP server provides **510 tools** covering the entire Dokploy API, organized into **49 categories**:
+This MCP server provides **511 tools** covering the entire Dokploy API, organized into **49 categories**:
 
 ### Core Resources
 
@@ -412,7 +412,7 @@ This MCP server provides **510 tools** covering the entire Dokploy API, organize
 | **Application** | 31 | Full application lifecycle — create, deploy, redeploy, start, stop, build types, deploy freeze (`application-setDeployFreeze`), git providers (GitHub, GitLab, Bitbucket, Gitea), environment, Traefik config |
 | **Compose** | 30 | Docker Compose management — create, deploy, templates, services, deploy freeze (`compose-setDeployFreeze`), environment, isolated deployments |
 | **Domain** | 9 | Domain CRUD, DNS validation, Traefik.me generation |
-| **Environment** | 7 | Multi-environment support per project |
+| **Environment** | 8 | Multi-environment support per project, deploy freeze (`environment-setDeployFreeze`) |
 | **Deployment** | 8 | Deployment history, queue management, centralized view |
 
 ### Databases
@@ -519,7 +519,7 @@ All tools include semantic annotations (`readOnlyHint`, `destructiveHint`, `idem
 
 Built with **@modelcontextprotocol/sdk**, **TypeScript**, and **Zod** for type-safe schema validation:
 
-- **510 Tools** covering the entire Dokploy API
+- **511 Tools** covering the entire Dokploy API
 - **Multiple Transports**: Stdio (default) and HTTP (Streamable HTTP + legacy SSE)
 - **Auto-generated Tools**: Tools are generated from the Dokploy OpenAPI spec via `bun run generate:all`
 - **Tool Filtering**: Load only the categories you need via `DOKPLOY_ENABLED_TAGS`

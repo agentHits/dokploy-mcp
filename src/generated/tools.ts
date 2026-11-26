@@ -7135,6 +7135,18 @@ export const generatedTools: ToolDefinition[] = [
     },
   },
   {
+    name: "environment-setDeployFreeze",
+    description: "POST /environment.setDeployFreeze",
+    tag: "environment",
+    method: "POST",
+    path: "/environment.setDeployFreeze",
+    schema: z.object({ "environmentId": z.string().min(1), "frozen": z.boolean(), "durationMinutes": z.union([z.number().int().gte(1).lte(43200), z.null()]).optional(), "reason": z.union([z.string().max(200), z.null()]).optional() }),
+    annotations: {
+      title: "Environment SetDeployFreeze",
+      ...{"openWorldHint":true},
+    },
+  },
+  {
     name: "environment-byProjectId",
     description: "GET /environment.byProjectId",
     tag: "environment",

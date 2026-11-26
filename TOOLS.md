@@ -2,7 +2,7 @@
 
 > Auto-generated from the [Dokploy OpenAPI spec](https://docs.dokploy.com/openapi.json). Run `pnpm generate` to update.
 
-- **Total Tools**: 603
+- **Total Tools**: 604
 - **Categories**: 58
 
 Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv`) are not exposed. Variables are managed with `env-keys` and `env-apply`, which never return values.
@@ -28,7 +28,7 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 - [dockerVolume](#dockerVolume) (8 tools)
 - [domain](#domain) (10 tools)
 - [env](#env) (2 tools)
-- [environment](#environment) (7 tools)
+- [environment](#environment) (8 tools)
 - [forwardAuth](#forwardAuth) (10 tools)
 - [gitea](#gitea) (8 tools)
 - [github](#github) (6 tools)
@@ -356,6 +356,7 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 |------|--------|------------|
 | `environment-create` | POST | `name` (string), `projectId` (string), `description`? |
 | `environment-one` | GET | `environmentId` (string) |
+| `environment-setDeployFreeze` | POST | `environmentId` (string), `frozen` (boolean), `durationMinutes`?, `reason`? |
 | `environment-byProjectId` | GET | `projectId` (string) |
 | `environment-remove` | POST | `environmentId` (string) |
 | `environment-update` | POST | `environmentId` (string), +4 optional |
