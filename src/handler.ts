@@ -424,7 +424,7 @@ export function createHandler(tool: ToolDefinition) {
       if (status === 412 && DEPLOY_FREEZE_GUARDED_TOOLS.has(tool.name)) {
         return ResponseFormatter.error(
           `Deploys are frozen (${tool.name})`,
-          "Deployments are currently frozen for this service. Do not retry automatically or pass force=true without explicit user confirmation. Inspect the freeze status with compose-one or application-one, then ask the user whether to unfreeze via compose-setDeployFreeze / application-setDeployFreeze or run a one-off forced deploy with force=true.",
+          "Deployments are currently frozen for this service or its parent environment. Do not retry automatically or pass force=true without explicit user confirmation. Inspect the freeze status with compose-one, application-one, or environment-one, then ask the user whether to unfreeze via compose-setDeployFreeze / application-setDeployFreeze / environment-setDeployFreeze or run a one-off forced deploy with force=true.",
         );
       }
 

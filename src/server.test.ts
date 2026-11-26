@@ -137,15 +137,17 @@ describe("MCP server tools/list", () => {
     expect(tools).toHaveLength(listableGeneratedTools.length + ALWAYS_LOADED_TOOLS);
   });
 
-  it("exposes compose-setDeployFreeze and application-setDeployFreeze with conservative annotations across presets", async () => {
+  it("exposes compose-, application-, and environment-setDeployFreeze with conservative annotations across presets", async () => {
     for (const preset of ["all", "deploy"] as const) {
       process.env.DOKPLOY_TOOL_PRESET = preset;
       const tools = await getToolList();
       const composeFreeze = tools.find((tool) => tool.name === "compose-setDeployFreeze");
       const appFreeze = tools.find((tool) => tool.name === "application-setDeployFreeze");
+      const envFreeze = tools.find((tool) => tool.name === "environment-setDeployFreeze");
       expect(composeFreeze).toBeDefined();
       expect(appFreeze).toBeDefined();
-      for (const tool of [composeFreeze, appFreeze]) {
+      expect(envFreeze).toBeDefined();
+      for (const tool of [composeFreeze, appFreeze, envFreeze]) {
         expect(tool?.annotations?.destructiveHint).not.toBe(true);
         expect(tool?.annotations?.idempotentHint).not.toBe(true);
         expect(tool?.annotations?.readOnlyHint).not.toBe(true);
@@ -158,6 +160,7 @@ describe("MCP server tools/list", () => {
       const tools = await getToolList();
       expect(tools.some((tool) => tool.name === "application-setDeployFreeze")).toBe(true);
       expect(tools.some((tool) => tool.name === "compose-setDeployFreeze")).toBe(false);
+      expect(tools.some((tool) => tool.name === "environment-setDeployFreeze")).toBe(false);
     }
   });
 
@@ -212,30 +215,6 @@ describe("MCP server tools/list", () => {
     const tools = await getToolList();
 
     expect(tools).toHaveLength(listableGeneratedTools.length + ALWAYS_LOADED_TOOLS);
-  });
-
-  it("exposes compose-setDeployFreeze and application-setDeployFreeze with conservative annotations across presets", async () => {
-    for (const preset of ["all", "deploy"] as const) {
-      process.env.DOKPLOY_TOOL_PRESET = preset;
-      const tools = await getToolList();
-      const composeFreeze = tools.find((tool) => tool.name === "compose-setDeployFreeze");
-      const appFreeze = tools.find((tool) => tool.name === "application-setDeployFreeze");
-      expect(composeFreeze).toBeDefined();
-      expect(appFreeze).toBeDefined();
-      for (const tool of [composeFreeze, appFreeze]) {
-        expect(tool?.annotations?.destructiveHint).not.toBe(true);
-        expect(tool?.annotations?.idempotentHint).not.toBe(true);
-        expect(tool?.annotations?.readOnlyHint).not.toBe(true);
-        expect(tool?.annotations?.openWorldHint).toBe(true);
-      }
-    }
-
-    for (const preset of ["core", "minimal"] as const) {
-      process.env.DOKPLOY_TOOL_PRESET = preset;
-      const tools = await getToolList();
-      expect(tools.some((tool) => tool.name === "application-setDeployFreeze")).toBe(true);
-      expect(tools.some((tool) => tool.name === "compose-setDeployFreeze")).toBe(false);
-    }
   });
 
   it("exposes deployment-readLogs for schedule deployment log inspection", async () => {
@@ -2432,6 +2411,8 @@ describe("MCP server tools/list", () => {
       expect(apiClient.post).toHaveBeenCalledTimes(1);
       expect(text).toContain(`Deploys are frozen (${toolName})`);
       expect(text).toContain("force=true");
+      expect(text).toContain("environment-one");
+      expect(text).toContain("environment-setDeployFreeze");
       expect(text).not.toContain(SECRET);
       expect(logs).not.toContain(SECRET);
     }
