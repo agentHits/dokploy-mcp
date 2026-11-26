@@ -460,4 +460,26 @@ describe("validate-bun-lock.py", () => {
     expect(runValidator(oldLock, bundledDowngrade).status).not.toBe(0);
     expect(runValidator(null, brandNewLock).status).toBe(0);
   });
+
+  it("cancels untouched spectator keys in Layer 1 without hiding downgrades", () => {
+    const oldLock = makeLockfile({
+      tslib: { spec: "tslib@2.8.1", integrity: "sha512-281" },
+      "parent-a/tslib": { spec: "tslib@2.9.1", integrity: "sha512-291" },
+      "parent-b/tslib": { spec: "tslib@2.9.1", integrity: "sha512-291" },
+    });
+    const legitPrune = makeLockfile({
+      tslib: { spec: "tslib@2.8.1", integrity: "sha512-281" },
+      "parent-b/tslib": { spec: "tslib@2.9.1", integrity: "sha512-291" },
+    });
+    const hiddenDowngrade = makeLockfile({
+      tslib: { spec: "tslib@2.8.1", integrity: "sha512-281" },
+      "parent-b/tslib": { spec: "tslib@2.9.1", integrity: "sha512-291" },
+      "parent-c/tslib": { spec: "tslib@2.8.5", integrity: "sha512-285" },
+    });
+
+    expect(runValidator(oldLock, legitPrune).status).toBe(0);
+    const bad = runValidator(oldLock, hiddenDowngrade);
+    expect(bad.status).not.toBe(0);
+    expect(bad.stderr).toContain("Layer 1");
+  });
 });
