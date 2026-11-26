@@ -1,10 +1,13 @@
 # Автообновление зависимостей Bun (заменило Dependabot для Bun: тот двигает только прямые
 # зависимости, а security-обновлений для Bun у него нет).
-# 2-уровневая политика обновлений против npm supply-chain червей:
+# Политика обновлений и защита от supply-chain / downgrade:
 # - Обычные обновления (после push в AgentHits-Dev и по расписанию 1x/сут, 04:10 UTC):
-#   bun update --ignore-scripts с cooldown 72 ч (minimumReleaseAge = 259200 с); затем bun audit.
-# - Подтверждённые CVE/GHSA: ручной workflow_dispatch с min_release_age="0" или точечным cve_pkg
-#   (передаётся в --minimum-release-age-excludes).
+#   bun update --ignore-scripts с minimumReleaseAge = 0 с (новые версии берутся сразу после
+#   публикации); затем bun audit.
+# - Ручной workflow_dispatch позволяет при необходимости задать cooldown через min_release_age
+#   (в секундах, например 259200 = 72 ч) и исключения через cve_pkg (--minimum-release-age-excludes).
+# - Доверенный job publish валидирует package.json и bun.lock относительно origin/AgentHits-Dev,
+#   включая строгий запрет SemVer 2.0.0 downgrade для любого зафиксированного пакета.
 # Итог - ветка deps/auto-update и один PR в AgentHits-Dev. Пока PR не влит, ветка пересобирается от
 # свежей AgentHits-Dev. Чужой commit в ветке открытого PR останавливает пересборку до merge или
 # закрытия PR. Workflow не мержит и не деплоит.
@@ -18,10 +21,10 @@ on:
   workflow_dispatch:
     inputs:
       min_release_age:
-        description: "Минимальный возраст релиза пакета в секундах (259200 = 72 ч; 0 — срочный фикс подтверждённой CVE)"
+        description: "Минимальный возраст релиза пакета в секундах (0 — по умолчанию, без задержки; например 259200 = 72 ч)"
         type: string
         required: false
-        default: "259200"
+        default: "0"
       cve_pkg:
         description: "Пакеты-исключения из cooldown для CVE-фикса (через запятую или пробел, minimumReleaseAgeExcludes)"
         type: string
@@ -70,7 +73,7 @@ jobs:
         id: update
         env:
           NO_COLOR: "1"
-          MIN_RELEASE_AGE: ${{ inputs.min_release_age != '' && inputs.min_release_age || '259200' }}
+          MIN_RELEASE_AGE: ${{ inputs.min_release_age != '' && inputs.min_release_age || '0' }}
           CVE_PKG: ${{ inputs.cve_pkg || '' }}
         run: |
           set -euo pipefail
@@ -241,7 +244,7 @@ jobs:
           CHANGED: ${{ needs.update.outputs.changed }}
           BASE_SHA: ${{ github.sha }}
           PR: ${{ steps.pr.outputs.number }}
-          MIN_RELEASE_AGE: ${{ inputs.min_release_age != '' && inputs.min_release_age || '259200' }}
+          MIN_RELEASE_AGE: ${{ inputs.min_release_age != '' && inputs.min_release_age || '0' }}
           CVE_PKG: ${{ inputs.cve_pkg || '' }}
         run: |
           set -euo pipefail
@@ -520,7 +523,7 @@ jobs:
           PY
           fi
 
-          # Zero-trust проверка каждого изменённого bun.lock на NUL-байты и инъекцию внешних/локальных URL.
+          # Zero-trust проверка каждого изменённого bun.lock на NUL-байты, инъекцию внешних/локальных URL и запрет SemVer 2.0.0 downgrade.
           if [ "${#lock_files[@]}" -gt 0 ]; then
             python3 -I - "$BASE" "${lock_files[@]}" <<'PY'
           import os
@@ -533,6 +536,46 @@ jobs:
           ref_re = re.compile(
               r"(?i)(?:https?://|git\+|git://|ssh://|file:|github:|bitbucket:|gitlab:)[^\s\"'`<>()\[\]{},;]*"
           )
+          pkg_entry_re = re.compile(r'^    "([^"]+)": \["(?:@[^/"]+/)?[^@"]+@([^"]+)"')
+          semver_re = re.compile(
+              r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+          )
+
+          def parse_semver(ver):
+              m = semver_re.fullmatch(ver)
+              if not m:
+                  return None
+              major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
+              pre = m.group(4)
+              if pre is None:
+                  return (major, minor, patch, 1, ())
+              pre_tuple = tuple(
+                  (0, int(p)) if p.isdigit() else (1, p) for p in pre.split(".")
+              )
+              return (major, minor, patch, 0, pre_tuple)
+
+          def parse_lock_packages(text):
+              pkgs = {}
+              in_packages = False
+              found_packages = False
+              for line in text.splitlines():
+                  if not in_packages:
+                      if re.match(r'^  "packages": \{\s*\},?\s*$', line):
+                          found_packages = True
+                          break
+                      if re.match(r'^  "packages": \{\s*$', line):
+                          in_packages = True
+                          found_packages = True
+                      continue
+                  if re.match(r'^  \},?\s*$', line):
+                      break
+                  m = pkg_entry_re.match(line)
+                  if m:
+                      key, ver = m.group(1), m.group(2)
+                      if key in pkgs:
+                          raise ValueError(f"duplicate key in bun.lock packages: {key}")
+                      pkgs[key] = ver
+              return pkgs, found_packages
 
           for path in lock_files:
               if os.path.islink(path):
@@ -541,6 +584,7 @@ jobs:
                   new_bytes = fh.read()
               if b"\x00" in new_bytes:
                   raise SystemExit(f"::error::{path}: содержит нулевой байт (\\x00)")
+              new_text = new_bytes.decode("utf-8", "replace")
               old_res = subprocess.run(
                   ["git", "show", f"origin/{base}:{path}"],
                   check=False,
@@ -552,6 +596,7 @@ jobs:
                   old_text = old_res.stdout.decode("utf-8", "replace")
                   allowed_refs = set(m.group(0) for m in ref_re.finditer(old_text))
               else:
+                  old_text = None
                   allowed_refs = set()
 
               diff_res = subprocess.run(
@@ -570,6 +615,31 @@ jobs:
                       found = m.group(0)
                       if found not in allowed_refs:
                           raise SystemExit(f"::error::{path}: запрещена новая ссылка в bun.lock: {found!r}")
+
+              if old_text is not None:
+                  try:
+                      old_pkgs, _ = parse_lock_packages(old_text)
+                      new_pkgs, new_found = parse_lock_packages(new_text)
+                  except ValueError as err:
+                      raise SystemExit(f"::error::{path}: {err}")
+                  if old_pkgs and not new_found:
+                      raise SystemExit(f"::error::{path}: missing \"packages\" section in bun.lock")
+                  downgrades = []
+                  for key in sorted(old_pkgs.keys() & new_pkgs.keys()):
+                      old_ver = old_pkgs[key]
+                      new_ver = new_pkgs[key]
+                      if old_ver == new_ver:
+                          continue
+                      old_sv = parse_semver(old_ver)
+                      new_sv = parse_semver(new_ver)
+                      if old_sv is None or new_sv is None:
+                          continue
+                      if new_sv < old_sv:
+                          downgrades.append(
+                              f"::error::{path}: downgrade forbidden for {key} ({old_ver} -> {new_ver})"
+                          )
+                  if downgrades:
+                      raise SystemExit("\n".join(downgrades))
           PY
           fi
 
@@ -616,10 +686,10 @@ jobs:
             if [ "$total" -gt 80 ]; then echo "- ... и ещё $((total - 80)), полный список в PR."; fi
             echo
             echo "Зачем:"
-            echo "- Ежедневное автообновление зависимостей Bun с cooldown и проверкой lockfile (workflow deps-auto-update)."
+            echo "- Ежедневное автообновление зависимостей Bun с проверкой lockfile и защитой от downgrade (workflow deps-auto-update)."
             echo
             echo "Проверки:"
-            echo "- Валидация allowlist путей (package.json, bun.lock) и отсутствие симлинков в publish."
+            echo "- Валидация allowlist путей (package.json, bun.lock), отсутствие симлинков и запрет SemVer downgrade в publish."
             echo "- Проверки ветки ($CI_WORKFLOWS) запускаются отдельно через workflow_dispatch."
           } > "$commit_msg"
           git commit -q -F "$commit_msg"
@@ -655,7 +725,7 @@ jobs:
           ACTION: ${{ steps.branch.outputs.action }}
           PUSHED_SHA: ${{ steps.branch.outputs.pushed_sha }}
           PR: ${{ steps.pr.outputs.number }}
-          MIN_RELEASE_AGE: ${{ inputs.min_release_age != '' && inputs.min_release_age || '259200' }}
+          MIN_RELEASE_AGE: ${{ inputs.min_release_age != '' && inputs.min_release_age || '0' }}
           CVE_PKG: ${{ inputs.cve_pkg || '' }}
           IS_REDISPATCH: ${{ inputs.redispatch == true && 'true' || 'false' }}
         with:
@@ -710,7 +780,7 @@ jobs:
                 workflow_id: 'deps-auto-update.yml',
                 ref: base,
                 inputs: {
-                  min_release_age: minReleaseAge || '259200',
+                  min_release_age: minReleaseAge || '0',
                   cve_pkg: cvePkg || '',
                   redispatch: 'true',
                 },
