@@ -49,12 +49,12 @@
     "@hono/node-server": "^2.1.11",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "axios": "^1.21.1",
-    "hono": "^4.13.21",
+    "hono": "^4.13.22",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.6.8",
-    "@types/node": "^26.6.6",
+    "@biomejs/biome": "^2.6.9",
+    "@types/node": "^26.6.11",
     "bun-types": "latest",
     "json-schema-to-zod": "^2.8.1",
     "typescript": "^7.0.2"
