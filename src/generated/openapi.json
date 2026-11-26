@@ -1002,6 +1002,9 @@
                   },
                   "description": {
                     "type": "string"
+                  },
+                  "force": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -1142,6 +1145,210 @@
                 "schema": {
                   "type": "object",
                   "properties": {},
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error.BAD_REQUEST"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization not provided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error.UNAUTHORIZED"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error.FORBIDDEN"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error.INTERNAL_SERVER_ERROR"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/application.setDeployFreeze": {
+      "post": {
+        "operationId": "application-setDeployFreeze",
+        "tags": [
+          "application"
+        ],
+        "security": [
+          {
+            "Authorization": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "applicationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "frozen": {
+                    "type": "boolean"
+                  },
+                  "durationMinutes": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 43200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "applicationId",
+                  "frozen"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "serviceId": {
+                      "type": "string"
+                    },
+                    "serviceType": {
+                      "type": "string",
+                      "enum": [
+                        "compose",
+                        "application"
+                      ]
+                    },
+                    "deployFreeze": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "active": {
+                              "type": "boolean",
+                              "const": true
+                            },
+                            "frozenAt": {
+                              "type": "string"
+                            },
+                            "expiresAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "reason": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "frozenByLabel": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "skippedCount": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "lastSkippedAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "lastSkippedSource": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "webhook",
+                                    "api",
+                                    "queue"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "active",
+                            "frozenAt",
+                            "expiresAt",
+                            "reason",
+                            "frozenByLabel",
+                            "skippedCount",
+                            "lastSkippedAt",
+                            "lastSkippedSource"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "serviceId",
+                    "serviceType",
+                    "deployFreeze"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -3946,6 +4153,9 @@
                   },
                   "description": {
                     "type": "string"
+                  },
+                  "force": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -9573,6 +9783,210 @@
         }
       }
     },
+    "/compose.setDeployFreeze": {
+      "post": {
+        "operationId": "compose-setDeployFreeze",
+        "tags": [
+          "compose"
+        ],
+        "security": [
+          {
+            "Authorization": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "composeId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "frozen": {
+                    "type": "boolean"
+                  },
+                  "durationMinutes": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 43200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "composeId",
+                  "frozen"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "serviceId": {
+                      "type": "string"
+                    },
+                    "serviceType": {
+                      "type": "string",
+                      "enum": [
+                        "compose",
+                        "application"
+                      ]
+                    },
+                    "deployFreeze": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "active": {
+                              "type": "boolean",
+                              "const": true
+                            },
+                            "frozenAt": {
+                              "type": "string"
+                            },
+                            "expiresAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "reason": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "frozenByLabel": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "skippedCount": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "lastSkippedAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "lastSkippedSource": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "webhook",
+                                    "api",
+                                    "queue"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "active",
+                            "frozenAt",
+                            "expiresAt",
+                            "reason",
+                            "frozenByLabel",
+                            "skippedCount",
+                            "lastSkippedAt",
+                            "lastSkippedSource"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "serviceId",
+                    "serviceType",
+                    "deployFreeze"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error.BAD_REQUEST"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authorization not provided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error.UNAUTHORIZED"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error.FORBIDDEN"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error.INTERNAL_SERVER_ERROR"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/compose.delete": {
       "post": {
         "operationId": "compose-delete",
@@ -10508,6 +10922,9 @@
                   },
                   "freshVolumes": {
                     "type": "boolean"
+                  },
+                  "force": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -10603,6 +11020,9 @@
                     "type": "string"
                   },
                   "freshVolumes": {
+                    "type": "boolean"
+                  },
+                  "force": {
                     "type": "boolean"
                   }
                 },
@@ -66107,6 +66527,9 @@
                   },
                   "expectedRevision": {
                     "type": "string"
+                  },
+                  "force": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -66253,6 +66676,9 @@
                     "type": "string",
                     "minLength": 8,
                     "maxLength": 200
+                  },
+                  "force": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -66537,6 +66963,9 @@
                   },
                   "repair": {
                     "default": false,
+                    "type": "boolean"
+                  },
+                  "force": {
                     "type": "boolean"
                   }
                 },

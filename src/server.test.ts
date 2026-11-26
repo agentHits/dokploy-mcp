@@ -58,7 +58,7 @@ const RECOVERY_PATHS = [
   "/deployment/reconcile",
 ] as const;
 const VERIFIED_RECOVERY_SUBTREE_SHA256 =
-  "924bb49db03e133053276e890d8570af89b63940015044a374c612d8dd4e209d";
+  "78518af26ac6c3eb11f0bd68df9dd4d821d00f5401ce160286aa26bac8125251";
 
 function responseText(result: { content: Array<{ type: string; text?: string }> }) {
   return result.content.map((item) => (item.type === "text" ? (item.text ?? "") : "")).join("\n");
@@ -137,6 +137,30 @@ describe("MCP server tools/list", () => {
     expect(tools).toHaveLength(listableGeneratedTools.length + ALWAYS_LOADED_TOOLS);
   });
 
+  it("exposes compose-setDeployFreeze and application-setDeployFreeze with conservative annotations across presets", async () => {
+    for (const preset of ["all", "deploy"] as const) {
+      process.env.DOKPLOY_TOOL_PRESET = preset;
+      const tools = await getToolList();
+      const composeFreeze = tools.find((tool) => tool.name === "compose-setDeployFreeze");
+      const appFreeze = tools.find((tool) => tool.name === "application-setDeployFreeze");
+      expect(composeFreeze).toBeDefined();
+      expect(appFreeze).toBeDefined();
+      for (const tool of [composeFreeze, appFreeze]) {
+        expect(tool?.annotations?.destructiveHint).not.toBe(true);
+        expect(tool?.annotations?.idempotentHint).not.toBe(true);
+        expect(tool?.annotations?.readOnlyHint).not.toBe(true);
+        expect(tool?.annotations?.openWorldHint).toBe(true);
+      }
+    }
+
+    for (const preset of ["core", "minimal"] as const) {
+      process.env.DOKPLOY_TOOL_PRESET = preset;
+      const tools = await getToolList();
+      expect(tools.some((tool) => tool.name === "application-setDeployFreeze")).toBe(true);
+      expect(tools.some((tool) => tool.name === "compose-setDeployFreeze")).toBe(false);
+    }
+  });
+
   it("supports DOKPLOY_TOOL_PRESET=minimal for clients sensitive to large toolsets", async () => {
     process.env.DOKPLOY_TOOL_PRESET = "minimal";
 
@@ -188,6 +212,30 @@ describe("MCP server tools/list", () => {
     const tools = await getToolList();
 
     expect(tools).toHaveLength(listableGeneratedTools.length + ALWAYS_LOADED_TOOLS);
+  });
+
+  it("exposes compose-setDeployFreeze and application-setDeployFreeze with conservative annotations across presets", async () => {
+    for (const preset of ["all", "deploy"] as const) {
+      process.env.DOKPLOY_TOOL_PRESET = preset;
+      const tools = await getToolList();
+      const composeFreeze = tools.find((tool) => tool.name === "compose-setDeployFreeze");
+      const appFreeze = tools.find((tool) => tool.name === "application-setDeployFreeze");
+      expect(composeFreeze).toBeDefined();
+      expect(appFreeze).toBeDefined();
+      for (const tool of [composeFreeze, appFreeze]) {
+        expect(tool?.annotations?.destructiveHint).not.toBe(true);
+        expect(tool?.annotations?.idempotentHint).not.toBe(true);
+        expect(tool?.annotations?.readOnlyHint).not.toBe(true);
+        expect(tool?.annotations?.openWorldHint).toBe(true);
+      }
+    }
+
+    for (const preset of ["core", "minimal"] as const) {
+      process.env.DOKPLOY_TOOL_PRESET = preset;
+      const tools = await getToolList();
+      expect(tools.some((tool) => tool.name === "application-setDeployFreeze")).toBe(true);
+      expect(tools.some((tool) => tool.name === "compose-setDeployFreeze")).toBe(false);
+    }
   });
 
   it("exposes deployment-readLogs for schedule deployment log inspection", async () => {
@@ -2264,7 +2312,7 @@ describe("MCP server tools/list", () => {
   });
 
   it("never surfaces a remote error body, for any status", async () => {
-    for (const status of [400, 401, 404, 409, 422, 500, 502]) {
+    for (const status of [400, 401, 404, 409, 412, 422, 500, 502]) {
       mock.clearAllMocks();
       mocked(apiClient.get).mockRejectedValueOnce({
         isAxiosError: true,
@@ -2286,6 +2334,137 @@ describe("MCP server tools/list", () => {
       expect(logs).not.toContain("remote-body");
       expect(logs).not.toContain(SECRET);
     }
+  });
+
+  it("forwards force only when provided on compose_deploy_exact and deployment_reconcile", async () => {
+    const exactOk = {
+      composeId: "compose_1",
+      operationId: "operation_1",
+      sourceRevision: "a".repeat(40),
+      resolvedRevision: "a".repeat(40),
+      status: "accepted",
+      deduplicated: false,
+    };
+
+    mock.clearAllMocks();
+    mocked(apiClient.post).mockResolvedValueOnce({ data: exactOk });
+    await callTool("compose_deploy_exact", {
+      composeId: "compose_1",
+      expectedRevision: "a".repeat(40),
+      idempotencyKey: "stable-key",
+    });
+    expect(apiClient.post).toHaveBeenCalledWith("/compose/deploy/exact", {
+      composeId: "compose_1",
+      expectedRevision: "a".repeat(40),
+      idempotencyKey: "stable-key",
+    });
+
+    mock.clearAllMocks();
+    mocked(apiClient.post).mockResolvedValueOnce({ data: exactOk });
+    await callTool("compose_deploy_exact", {
+      composeId: "compose_1",
+      expectedRevision: "a".repeat(40),
+      idempotencyKey: "stable-key",
+      force: true,
+    });
+    expect(apiClient.post).toHaveBeenCalledWith("/compose/deploy/exact", {
+      composeId: "compose_1",
+      expectedRevision: "a".repeat(40),
+      idempotencyKey: "stable-key",
+      force: true,
+    });
+
+    const inspect = reconcileFixture();
+    mock.clearAllMocks();
+    mocked(apiClient.post)
+      .mockResolvedValueOnce({ data: inspect })
+      .mockResolvedValueOnce({ data: { ...inspect, repairPerformed: true } });
+    await callTool("deployment_reconcile", {
+      composeId: "compose_1",
+      operationId: "operation_1",
+      repair: true,
+      force: true,
+    });
+    expect(apiClient.post).toHaveBeenNthCalledWith(1, "/deployment/reconcile", {
+      composeId: "compose_1",
+      operationId: "operation_1",
+      repair: false,
+    });
+    expect(apiClient.post).toHaveBeenNthCalledWith(2, "/deployment/reconcile", {
+      composeId: "compose_1",
+      operationId: "operation_1",
+      repair: true,
+      force: true,
+    });
+  });
+
+  it("returns static freeze guidance on HTTP 412 for guarded deploy tools without retries or leakage", async () => {
+    const frozenError = {
+      isAxiosError: true,
+      message: `Request failed: ${SECRET}`,
+      response: {
+        status: 412,
+        data: { message: `DEPLOY_FROZEN: API_TOKEN=${SECRET}` },
+      },
+    };
+
+    for (const [toolName, args] of [
+      ["compose-deploy", { composeId: "compose_1" }],
+      [
+        "compose_deploy_exact",
+        {
+          composeId: "compose_1",
+          expectedRevision: "a".repeat(40),
+          idempotencyKey: "stable-key",
+        },
+      ],
+      [
+        "application-env-upsert",
+        { applicationId: "app_1", variables: { PORT: "3000" }, redeploy: true },
+      ],
+    ] as const) {
+      mock.clearAllMocks();
+      mocked(apiClient.post).mockRejectedValueOnce(frozenError);
+      const { result, logs } = await callToolCapturingLogs(toolName, { ...args });
+      const text = resultText(result);
+
+      expect(result.isError).toBe(true);
+      expect(apiClient.post).toHaveBeenCalledTimes(1);
+      expect(text).toContain(`Deploys are frozen (${toolName})`);
+      expect(text).toContain("force=true");
+      expect(text).not.toContain(SECRET);
+      expect(logs).not.toContain(SECRET);
+    }
+
+    const inspect = reconcileFixture();
+    mock.clearAllMocks();
+    mocked(apiClient.post)
+      .mockResolvedValueOnce({ data: inspect })
+      .mockRejectedValueOnce(frozenError);
+    const reconcileOutcome = await callToolCapturingLogs("deployment_reconcile", {
+      composeId: "compose_1",
+      operationId: "operation_1",
+      repair: true,
+    });
+    expect(reconcileOutcome.result.isError).toBe(true);
+    expect(apiClient.post).toHaveBeenCalledTimes(2);
+    expect(resultText(reconcileOutcome.result)).toContain(
+      "Deploys are frozen (deployment_reconcile)",
+    );
+    expect(resultText(reconcileOutcome.result)).not.toContain(SECRET);
+
+    mock.clearAllMocks();
+    mocked(apiClient.post).mockRejectedValueOnce(frozenError);
+    const nonDeployOutcome = await callToolCapturingLogs("application-update", {
+      applicationId: "app_1",
+      name: "renamed",
+    });
+    expect(nonDeployOutcome.result.isError).toBe(true);
+    expect(resultText(nonDeployOutcome.result)).toContain(
+      "The Dokploy API request failed with status 412",
+    );
+    expect(resultText(nonDeployOutcome.result)).not.toContain("Deploys are frozen");
+    expect(resultText(nonDeployOutcome.result)).not.toContain(SECRET);
   });
 });
 

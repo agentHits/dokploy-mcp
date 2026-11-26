@@ -2,7 +2,7 @@
 
 > Auto-generated from the [Dokploy OpenAPI spec](https://docs.dokploy.com/openapi.json). Run `pnpm generate` to update.
 
-- **Total Tools**: 601
+- **Total Tools**: 603
 - **Categories**: 58
 
 Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv`) are not exposed. Variables are managed with `env-keys` and `env-apply`, which never return values.
@@ -11,13 +11,13 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 
 - [admin](#admin) (1 tools)
 - [ai](#ai) (14 tools)
-- [application](#application) (32 tools)
+- [application](#application) (33 tools)
 - [auditLog](#auditLog) (1 tools)
 - [backup](#backup) (12 tools)
 - [bitbucket](#bitbucket) (7 tools)
 - [certificates](#certificates) (5 tools)
 - [cluster](#cluster) (4 tools)
-- [compose](#compose) (32 tools)
+- [compose](#compose) (33 tools)
 - [customRole](#customRole) (6 tools)
 - [deployment](#deployment) (10 tools)
 - [destination](#destination) (6 tools)
@@ -104,7 +104,8 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 | `application-delete` | POST | `applicationId` (string) |
 | `application-stop` | POST | `applicationId` (string) |
 | `application-start` | POST | `applicationId` (string) |
-| `application-redeploy` | POST | `applicationId` (string), `title`?, `description`? |
+| `application-redeploy` | POST | `applicationId` (string), `title`?, `description`?, `force`? |
+| `application-setDeployFreeze` | POST | `applicationId` (string), `frozen` (boolean), `durationMinutes`?, `reason`? |
 | `application-saveBuildType` | POST | `applicationId` (string), `buildType` ("dockerfile" | "heroku_buildpacks" | "paketo_buildpacks" | "nixpacks" | "static" | "railpack"), `dockerfile` (string | null), `dockerContextPath` (string | null), `dockerBuildStage` (string | null), `herokuVersion` (string | null), `railpackVersion` (string | null), `publishDirectory`?, `isStaticSpa`? |
 | `application-saveGithubProvider` | POST | `applicationId` (string), `repository` (string | null), `owner` (string | null), `buildPath` (string | null), `githubId` (string | null), `branch` (string), `triggerType` ("push" | "tag"), `enableSubmodules`?, `watchPaths`? |
 | `application-saveGitlabProvider` | POST | `applicationId` (string), `gitlabBuildPath` (string | null), `gitlabOwner` (string | null), `gitlabRepository` (string | null), `gitlabId` (string | null), `gitlabProjectId` (number | null), `gitlabPathNamespace` (string | null), `gitlabBranch` (string), `enableSubmodules`?, `watchPaths`? |
@@ -116,7 +117,7 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 | `application-markRunning` | POST | `applicationId` (string) |
 | `application-update` | POST | `applicationId` (string), +99 optional |
 | `application-refreshToken` | POST | `applicationId` (string) |
-| `application-deploy` | POST | `applicationId` (string), `title`?, `description`? |
+| `application-deploy` | POST | `applicationId` (string), `title`?, `description`?, `force`? |
 | `application-cleanQueues` | POST | `applicationId` (string) |
 | `application-clearDeployments` | POST | `applicationId` (string) |
 | `application-killBuild` | POST | `applicationId` (string) |
@@ -128,7 +129,7 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 | `application-cancelDeployment` | POST | `applicationId` (string) |
 | `application-search` | GET | +11 optional |
 | `application-readLogs` | GET | `applicationId` (string), `tail`?, `since`?, `search`? |
-| `application-env-upsert` | POST | `applicationId` (string), `variables` (object), `redeploy`?, `dryRun`?, `expectedRevision`? |
+| `application-env-upsert` | POST | `applicationId` (string), `variables` (object), +4 optional |
 
 ## auditLog
 
@@ -191,6 +192,7 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 | `compose-create` | POST | `name` (string), `environmentId` (string), +6 optional |
 | `compose-one` | GET | `composeId` (string) |
 | `compose-update` | POST | `composeId` (string), +46 optional |
+| `compose-setDeployFreeze` | POST | `composeId` (string), `frozen` (boolean), `durationMinutes`?, `reason`? |
 | `compose-delete` | POST | `composeId` (string), `deleteVolumes` (boolean) |
 | `compose-cleanQueues` | POST | `composeId` (string) |
 | `compose-clearDeployments` | POST | `composeId` (string) |
@@ -201,8 +203,8 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 | `compose-randomizeCompose` | POST | `composeId` (string), `suffix`? |
 | `compose-isolatedDeployment` | POST | `composeId` (string), `suffix`? |
 | `compose-getConvertedCompose` | GET | `composeId` (string) |
-| `compose-deploy` | POST | `composeId` (string), `title`?, `description`?, `freshVolumes`? |
-| `compose-redeploy` | POST | `composeId` (string), `title`?, `description`?, `freshVolumes`? |
+| `compose-deploy` | POST | `composeId` (string), +4 optional |
+| `compose-redeploy` | POST | `composeId` (string), +4 optional |
 | `compose-stop` | POST | `composeId` (string) |
 | `compose-start` | POST | `composeId` (string) |
 | `compose-getDefaultCommand` | GET | `composeId` (string) |
@@ -218,7 +220,7 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 | `compose-cancelDeployment` | POST | `composeId` (string) |
 | `compose-search` | GET | +8 optional |
 | `compose-readLogs` | GET | `composeId` (string), `containerId` (string), `tail`?, `since`?, `search`? |
-| `compose_deploy_exact` | POST | `composeId` (string), `expectedRevision` (string), `idempotencyKey` (string) |
+| `compose_deploy_exact` | POST | `composeId` (string), `expectedRevision` (string), `idempotencyKey` (string), `force`? |
 | `compose_env_upsert` | POST | `composeId` (string), `variables` (object), `dryRun`?, `expectedRevision`? |
 
 ## customRole
@@ -245,7 +247,7 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 | `deployment-killProcess` | POST | `deploymentId` (string) |
 | `deployment-removeDeployment` | POST | `deploymentId` (string) |
 | `deployment-readLogs` | GET | `deploymentId` (string), `tail`? |
-| `deployment_reconcile` | POST | `composeId` (string), `operationId` (string), `repair`? |
+| `deployment_reconcile` | POST | `composeId` (string), `operationId` (string), `repair`?, `force`? |
 
 ## destination
 

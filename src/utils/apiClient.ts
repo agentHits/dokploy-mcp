@@ -116,6 +116,9 @@ function handleServerError(response: AxiosResponse): void {
     case 404:
       logger.error("Resource not found", errorContext);
       break;
+    case 412:
+      logger.warn("Precondition failed", errorContext);
+      break;
     case 422:
       logger.error("Validation error", errorContext);
       break;
