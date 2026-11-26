@@ -49,6 +49,14 @@ const API_PATH_OVERRIDES: Record<string, string> = {
   "/application.env.upsert": "/application/env/upsert",
 };
 
+// Upstream SCIM endpoints were removed in Dokploy and return HTTP 404; exclude
+// them here so future OpenAPI refreshes never resurrect dead tools.
+const EXCLUDED_PATHS = new Set([
+  "/scim.listProviders",
+  "/scim.generateToken",
+  "/scim.deleteProvider",
+]);
+
 interface ExactPathPolicy {
   name: string;
   title: string;
@@ -397,7 +405,7 @@ function generateToolsMd(entries: ToolMdEntry[]): string {
   const lines: string[] = [
     "# Dokploy MCP Server - Tools Documentation",
     "",
-    "> Auto-generated from the [Dokploy OpenAPI spec](https://docs.dokploy.com/openapi.json). Run `pnpm generate` to update.",
+    "> Auto-generated from the [Dokploy OpenAPI spec](https://docs.dokploy.com/openapi.json). Run `bun run generate` to update.",
     "",
     `- **Total Tools**: ${entries.length}`,
     `- **Categories**: ${grouped.size}`,
@@ -472,6 +480,9 @@ function main() {
   let errorCount = 0;
 
   for (const [path, methods] of paths) {
+    if (EXCLUDED_PATHS.has(path)) {
+      continue;
+    }
     for (const [method, op] of Object.entries(methods)) {
       const operationId = op.operationId;
       if (!operationId) {
@@ -537,7 +548,7 @@ function main() {
   // Write generated tools.ts
   const output = `// AUTO-GENERATED FILE — DO NOT EDIT MANUALLY
 // Generated from openapi.json
-// Run \`pnpm generate\` to regenerate
+// Run \`bun run generate\` to regenerate
 
 import { z } from "zod";
 import type { ToolDefinition } from "../types.js";

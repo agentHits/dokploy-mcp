@@ -1,9 +1,9 @@
 # Dokploy MCP Server - Tools Documentation
 
-> Auto-generated from the [Dokploy OpenAPI spec](https://docs.dokploy.com/openapi.json). Run `pnpm generate` to update.
+> Auto-generated from the [Dokploy OpenAPI spec](https://docs.dokploy.com/openapi.json). Run `bun run generate` to update.
 
-- **Total Tools**: 604
-- **Categories**: 58
+- **Total Tools**: 601
+- **Categories**: 57
 
 Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv`) are not exposed. Variables are managed with `env-keys` and `env-apply`, which never return values.
 
@@ -54,7 +54,6 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 - [registry](#registry) (7 tools)
 - [rollback](#rollback) (2 tools)
 - [schedule](#schedule) (6 tools)
-- [scim](#scim) (3 tools)
 - [security](#security) (4 tools)
 - [server](#server) (19 tools)
 - [settings](#settings) (51 tools)
@@ -736,14 +735,6 @@ Tools that need a whole env text (`*-saveEnvironment`, `settings-writeTraefikEnv
 | `schedule-list` | GET | `id` (string), `scheduleType` ("application" | "compose" | "server" | "dokploy-server") |
 | `schedule-one` | GET | `scheduleId` (string) |
 | `schedule-runManually` | POST | `scheduleId` (string) |
-
-## scim
-
-| Tool | Method | Parameters |
-|------|--------|------------|
-| `scim-listProviders` | GET | None |
-| `scim-generateToken` | POST | `providerId` (string) |
-| `scim-deleteProvider` | POST | `providerId` (string) |
 
 ## security
 

@@ -137,6 +137,18 @@ describe("MCP server tools/list", () => {
     expect(tools).toHaveLength(listableGeneratedTools.length + ALWAYS_LOADED_TOOLS);
   });
 
+  // Dropped from the curated OpenAPI spec because Dokploy removed these SCIM endpoints (HTTP 404).
+  it("does not register removed dead SCIM tools", async () => {
+    const tools = await getToolList();
+    const registeredNames = new Set(tools.map((tool) => tool.name));
+    const generatedNames = new Set(generatedTools.map((tool) => tool.name));
+
+    for (const removedTool of ["scim-listProviders", "scim-generateToken", "scim-deleteProvider"]) {
+      expect(registeredNames.has(removedTool)).toBe(false);
+      expect(generatedNames.has(removedTool)).toBe(false);
+    }
+  });
+
   it("exposes compose-, application-, and environment-setDeployFreeze with conservative annotations across presets", async () => {
     for (const preset of ["all", "deploy"] as const) {
       process.env.DOKPLOY_TOOL_PRESET = preset;
