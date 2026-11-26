@@ -4,7 +4,7 @@
 
 Dokploy MCP Server exposes **all Dokploy API endpoints** as tools consumable via the Model Context Protocol (MCP). It allows MCP-compatible clients (e.g., AI models, other applications) to interact with your Dokploy server programmatically.
 
-With **511 tools** across **49 categories**, this server provides complete coverage of the Dokploy API — from project and application management to databases, notifications, SSO, Docker, backups, and more.
+With **601 tools** across **57 categories**, this server provides complete coverage of the Dokploy API — from project and application management to databases, notifications, SSO, Docker, backups, and more.
 
 ## Getting Started
 
@@ -400,82 +400,11 @@ Request bodies are limited to 4 MB, with or without `Content-Length`; a larger b
 
 `docker-compose.yml` publishes the port on `127.0.0.1` (`EXTERNAL_HOST`). Before you publish it on other interfaces, set `MCP_AUTH_TOKEN` and put TLS in front of the server, so the token does not travel in plain text.
 
-## Available Tools (511)
+## Available Tools (601)
 
-This MCP server provides **511 tools** covering the entire Dokploy API, organized into **49 categories**:
+This MCP server provides **601 tools** covering the Dokploy API, organized into **57 categories** — including projects, applications, Docker Compose, environments, deployments (with deploy freeze controls via `application-setDeployFreeze`, `compose-setDeployFreeze`, and `environment-setDeployFreeze`), databases (PostgreSQL, MySQL, MariaDB, MongoDB, Redis, LibSQL), servers, Docker, Swarm/Cluster, backups, notifications, Git providers, SSO, DNS/vault/forward-auth integrations, and blind environment variable management (`env-keys`, `env-apply`).
 
-### Core Resources
-
-| Category | Tools | Description |
-|----------|-------|-------------|
-| **Project** | 8 | Create, list, update, duplicate, search, and delete projects |
-| **Application** | 31 | Full application lifecycle — create, deploy, redeploy, start, stop, build types, deploy freeze (`application-setDeployFreeze`), git providers (GitHub, GitLab, Bitbucket, Gitea), environment, Traefik config |
-| **Compose** | 30 | Docker Compose management — create, deploy, templates, services, deploy freeze (`compose-setDeployFreeze`), environment, isolated deployments |
-| **Domain** | 9 | Domain CRUD, DNS validation, Traefik.me generation |
-| **Environment** | 8 | Multi-environment support per project, deploy freeze (`environment-setDeployFreeze`) |
-| **Deployment** | 8 | Deployment history, queue management, centralized view |
-
-### Databases
-
-| Category | Tools | Description |
-|----------|-------|-------------|
-| **PostgreSQL** | 15 | Full lifecycle — create, deploy, start, stop, rebuild, passwords, external ports, environment |
-| **MySQL** | 15 | Full lifecycle — create, deploy, start, stop, rebuild, passwords, external ports, environment |
-| **MariaDB** | 15 | Full lifecycle — create, deploy, start, stop, rebuild, passwords, external ports, environment |
-| **MongoDB** | 15 | Full lifecycle — create, deploy, start, stop, rebuild, passwords, external ports, environment |
-| **Redis** | 15 | Full lifecycle — create, deploy, start, stop, rebuild, passwords, external ports, environment |
-| **LibSQL** | 13 | Full lifecycle — create, deploy, start, stop, rebuild, external ports, environment |
-
-### Infrastructure
-
-| Category | Tools | Description |
-|----------|-------|-------------|
-| **Server** | 17 | Multi-server management, metrics, security, monitoring setup |
-| **Docker** | 9 | Container management — list, restart, remove, upload files, inspect config |
-| **Cluster / Swarm** | 8 | Swarm node management, container stats, cluster operations |
-| **Settings** | 51 | Server settings, Traefik config, Docker cleanup, GPU, monitoring, Redis, disk usage |
-| **Registry** | 7 | Docker registry management and testing |
-
-### Security & Auth
-
-| Category | Tools | Description |
-|----------|-------|-------------|
-| **SSO** | 10 | Single sign-on providers, trusted origins |
-| **SSH Keys** | 7 | SSH key management — create, generate, list, update, remove |
-| **Certificates** | 5 | SSL/TLS certificate management |
-| **Security** | 4 | Basic auth and security rules per application |
-| **Custom Roles** | 6 | Role-based access control with custom permissions |
-| **User** | 23 | User management, permissions, API keys, invitations, metrics |
-| **Organization** | 11 | Multi-org support, invitations, member roles |
-
-### Operations
-
-| Category | Tools | Description |
-|----------|-------|-------------|
-| **Backup** | 12 | Database backups — Postgres, MySQL, MariaDB, MongoDB, LibSQL, Compose, WebServer |
-| **Volume Backups** | 6 | Volume-level backup scheduling and management |
-| **Destination** | 6 | S3-compatible backup destinations (AWS, Cloudflare R2, etc.) |
-| **Schedule** | 6 | Scheduled tasks — cron-based automation |
-| **Notification** | 41 | Multi-channel alerts — Slack, Discord, Telegram, Email, Teams, Gotify, Ntfy, Pushover, Lark, Mattermost, Resend, Custom webhooks |
-| **Rollback** | 2 | Application rollback management |
-
-### Other
-
-| Category | Tools | Description |
-|----------|-------|-------------|
-| **AI** | 9 | AI-powered suggestions, model management |
-| **Git Providers** | 27 | GitHub, GitLab, Gitea, Bitbucket — branches, repos, connection testing |
-| **Tag** | 8 | Project tagging and bulk assignment |
-| **Patch** | 12 | File patching system for applications |
-| **Mounts** | 6 | Volume and bind mount management |
-| **Port** | 4 | Port mapping configuration |
-| **Redirects** | 4 | URL redirect rules |
-| **Preview Deployments** | 4 | PR preview deployment management |
-| **Stripe** | 7 | Billing and subscription management |
-| **License Key** | 6 | Enterprise license management |
-| **Whitelabeling** | 4 | Custom branding for enterprise |
-| **Audit Log** | 1 | Activity audit trail |
-| **Admin** | 1 | Admin-level monitoring setup |
+See the auto-generated [TOOLS.md](./TOOLS.md) for the complete, up-to-date catalog of all categories, tools, HTTP methods, and parameters.
 
 ### Tool Filtering
 
@@ -519,7 +448,7 @@ All tools include semantic annotations (`readOnlyHint`, `destructiveHint`, `idem
 
 Built with **@modelcontextprotocol/sdk**, **TypeScript**, and **Zod** for type-safe schema validation:
 
-- **511 Tools** covering the entire Dokploy API
+- **601 Tools** across **57 categories** covering the Dokploy API
 - **Multiple Transports**: Stdio (default) and HTTP (Streamable HTTP + legacy SSE)
 - **Auto-generated Tools**: Tools are generated from the Dokploy OpenAPI spec via `bun run generate:all`
 - **Tool Filtering**: Load only the categories you need via `DOKPLOY_ENABLED_TAGS`
