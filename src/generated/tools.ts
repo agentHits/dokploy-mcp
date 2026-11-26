@@ -108,7 +108,7 @@ export const generatedTools: ToolDefinition[] = [
     tag: "application",
     method: "POST",
     path: "/application.redeploy",
-    schema: z.object({ "applicationId": z.string().min(1), "title": z.string().optional(), "description": z.string().optional() }),
+    schema: z.object({ "applicationId": z.string().min(1), "title": z.string().optional(), "description": z.string().optional(), "force": z.boolean().optional() }),
     annotations: {
       title: "Application Redeploy",
       ...{"openWorldHint":true},
@@ -123,6 +123,18 @@ export const generatedTools: ToolDefinition[] = [
     schema: z.object({ "applicationId": z.string(), "env": z.union([z.string(), z.null()]), "buildArgs": z.union([z.string(), z.null()]), "buildSecrets": z.union([z.string(), z.null()]), "createEnvFile": z.boolean() }),
     annotations: {
       title: "Application SaveEnvironment",
+      ...{"openWorldHint":true},
+    },
+  },
+  {
+    name: "application-setDeployFreeze",
+    description: "POST /application.setDeployFreeze",
+    tag: "application",
+    method: "POST",
+    path: "/application.setDeployFreeze",
+    schema: z.object({ "applicationId": z.string().min(1), "frozen": z.boolean(), "durationMinutes": z.union([z.number().int().gte(1).lte(43200), z.null()]).optional(), "reason": z.union([z.string().max(200), z.null()]).optional() }),
+    annotations: {
+      title: "Application SetDeployFreeze",
       ...{"openWorldHint":true},
     },
   },
@@ -264,7 +276,7 @@ export const generatedTools: ToolDefinition[] = [
     tag: "application",
     method: "POST",
     path: "/application.deploy",
-    schema: z.object({ "applicationId": z.string().min(1), "title": z.string().optional(), "description": z.string().optional() }),
+    schema: z.object({ "applicationId": z.string().min(1), "title": z.string().optional(), "description": z.string().optional(), "force": z.boolean().optional() }),
     annotations: {
       title: "Application Deploy",
       ...{"openWorldHint":true},
@@ -895,6 +907,18 @@ export const generatedTools: ToolDefinition[] = [
     },
   },
   {
+    name: "compose-setDeployFreeze",
+    description: "POST /compose.setDeployFreeze",
+    tag: "compose",
+    method: "POST",
+    path: "/compose.setDeployFreeze",
+    schema: z.object({ "composeId": z.string().min(1), "frozen": z.boolean(), "durationMinutes": z.union([z.number().int().gte(1).lte(43200), z.null()]).optional(), "reason": z.union([z.string().max(200), z.null()]).optional() }),
+    annotations: {
+      title: "Compose SetDeployFreeze",
+      ...{"openWorldHint":true},
+    },
+  },
+  {
     name: "compose-delete",
     description: "POST /compose.delete",
     tag: "compose",
@@ -1020,7 +1044,7 @@ export const generatedTools: ToolDefinition[] = [
     tag: "compose",
     method: "POST",
     path: "/compose.deploy",
-    schema: z.object({ "composeId": z.string().min(1), "title": z.string().optional(), "description": z.string().optional(), "freshVolumes": z.boolean().optional() }),
+    schema: z.object({ "composeId": z.string().min(1), "title": z.string().optional(), "description": z.string().optional(), "freshVolumes": z.boolean().optional(), "force": z.boolean().optional() }),
     annotations: {
       title: "Compose Deploy",
       ...{"openWorldHint":true},
@@ -1032,7 +1056,7 @@ export const generatedTools: ToolDefinition[] = [
     tag: "compose",
     method: "POST",
     path: "/compose.redeploy",
-    schema: z.object({ "composeId": z.string().min(1), "title": z.string().optional(), "description": z.string().optional(), "freshVolumes": z.boolean().optional() }),
+    schema: z.object({ "composeId": z.string().min(1), "title": z.string().optional(), "description": z.string().optional(), "freshVolumes": z.boolean().optional(), "force": z.boolean().optional() }),
     annotations: {
       title: "Compose Redeploy",
       ...{"openWorldHint":true},
@@ -7452,7 +7476,7 @@ export const generatedTools: ToolDefinition[] = [
     tag: "application",
     method: "POST",
     path: "/application/env/upsert",
-    schema: z.object({ "applicationId": z.string().min(1), "variables": z.record(z.string().regex(new RegExp("^[A-Za-z_][A-Za-z0-9_]*$")), z.string()).refine((value) => Object.keys(value).length >= 1, "At least 1 property is required"), "redeploy": z.boolean().optional(), "dryRun": z.boolean().optional(), "expectedRevision": z.string().optional() }),
+    schema: z.object({ "applicationId": z.string().min(1), "variables": z.record(z.string().regex(new RegExp("^[A-Za-z_][A-Za-z0-9_]*$")), z.string()).refine((value) => Object.keys(value).length >= 1, "At least 1 property is required"), "redeploy": z.boolean().optional(), "dryRun": z.boolean().optional(), "expectedRevision": z.string().optional(), "force": z.boolean().optional() }),
     annotations: {
       title: "Application Env Upsert",
       ...{"openWorldHint":true},
@@ -7464,7 +7488,7 @@ export const generatedTools: ToolDefinition[] = [
     tag: "compose",
     method: "POST",
     path: "/compose/deploy/exact",
-    schema: z.object({ "composeId": z.string().min(1), "expectedRevision": z.string().regex(new RegExp("^[0-9a-f]{40}$")), "idempotencyKey": z.string().min(8).max(200) }),
+    schema: z.object({ "composeId": z.string().min(1), "expectedRevision": z.string().regex(new RegExp("^[0-9a-f]{40}$")), "idempotencyKey": z.string().min(8).max(200), "force": z.boolean().optional() }),
     annotations: {
       title: "Compose Deploy Exact",
       ...{"destructiveHint":true,"idempotentHint":true,"openWorldHint":true},
@@ -7492,7 +7516,7 @@ export const generatedTools: ToolDefinition[] = [
     tag: "deployment",
     method: "POST",
     path: "/deployment/reconcile",
-    schema: z.object({ "composeId": z.string().min(1), "operationId": z.string().min(1), "repair": z.boolean().default(false) }),
+    schema: z.object({ "composeId": z.string().min(1), "operationId": z.string().min(1), "repair": z.boolean().default(false), "force": z.boolean().optional() }),
     annotations: {
       title: "Deployment Reconcile",
       ...{"destructiveHint":true,"openWorldHint":true},

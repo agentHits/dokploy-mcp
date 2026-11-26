@@ -22,6 +22,15 @@ import {
 const logger = createLogger("ToolHandler");
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 502, 503, 504]);
 const FINAL_OPERATION_STATUSES = new Set(["running", "succeeded", "failed"]);
+const DEPLOY_FREEZE_GUARDED_TOOLS = new Set([
+  "compose-deploy",
+  "compose_deploy_exact",
+  "compose-redeploy",
+  "application-deploy",
+  "application-redeploy",
+  "application-env-upsert",
+  "deployment_reconcile",
+]);
 // The panel returns these file bodies base64-encoded with no encoding marker.
 const BASE64_CONTENT_PATHS = new Set(["/docker.readContainerFile", "/dockerVolume.readVolumeFile"]);
 
@@ -227,6 +236,7 @@ async function executeExactDeploy(
     composeId: input.composeId,
     expectedRevision: input.expectedRevision,
     idempotencyKey: input.idempotencyKey,
+    ...(input.force !== undefined ? { force: input.force } : {}),
   };
   const response = await postWithBoundedRetry(tool.path, body, tool.execution?.maxAttempts ?? 1);
   const result = parseRecoveryResponse(tool, response.data);
@@ -276,6 +286,7 @@ async function executeDeploymentReconcile(
     composeId: input.composeId,
     operationId: input.operationId,
     repair: true,
+    ...(input.force !== undefined ? { force: input.force } : {}),
   };
   const repairResponse = await apiClient.post(tool.path, repairBody);
   const repaired = parseRecoveryResponse(tool, repairResponse.data);
@@ -408,6 +419,12 @@ export function createHandler(tool: ToolDefinition) {
         return ResponseFormatter.error(
           `Conflict while executing ${tool.name}`,
           conflictDetails(tool),
+        );
+      }
+      if (status === 412 && DEPLOY_FREEZE_GUARDED_TOOLS.has(tool.name)) {
+        return ResponseFormatter.error(
+          `Deploys are frozen (${tool.name})`,
+          "Deployments are currently frozen for this service. Do not retry automatically or pass force=true without explicit user confirmation. Inspect the freeze status with compose-one or application-one, then ask the user whether to unfreeze via compose-setDeployFreeze / application-setDeployFreeze or run a one-off forced deploy with force=true.",
         );
       }
 
