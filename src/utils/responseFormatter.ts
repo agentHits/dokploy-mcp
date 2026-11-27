@@ -4,8 +4,8 @@ export interface FormattedResponse {
   isError?: boolean;
 }
 
-export class ResponseFormatter {
-  static success(message: string, data?: unknown): FormattedResponse {
+export const ResponseFormatter = {
+  success(message: string, data?: unknown): FormattedResponse {
     const responseData = {
       success: true,
       message,
@@ -20,9 +20,9 @@ export class ResponseFormatter {
         },
       ],
     };
-  }
+  },
 
-  static error(message: string, details?: string): FormattedResponse {
+  error(message: string, details?: string): FormattedResponse {
     const errorData = {
       success: false,
       error: message,
@@ -38,5 +38,5 @@ export class ResponseFormatter {
         },
       ],
     };
-  }
-}
+  },
+};
